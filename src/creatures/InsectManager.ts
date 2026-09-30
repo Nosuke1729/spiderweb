@@ -30,17 +30,18 @@ export class InsectManager {
       const insect=this.insects[i];
       if(insect.caught){
         const c=insect.caught;c.time+=dt;
+        if(!this.web.strands.has(c.strand)){insect.caught=undefined;insect.target.set(insect.position.x, insect.position.y+1,insect.position.z);continue;}
         insect.position.copy(c.point).add(new THREE.Vector3(Math.sin(t*22+i)*.025,Math.sin(t*30+i)*.025,Math.cos(t*24+i)*.025));
         insect.group.position.copy(insect.position);
         insect.group.rotation.z=Math.sin(t*23)*.3;
-        if(c.time>8){insect.caught=undefined;insect.target.set(random(-18,18),random(1,6),random(-14,14));}
+        if(c.time>18){insect.caught=undefined;insect.target.set(random(-18,18),random(1,6),random(-14,14));}
         else if(Math.random()<dt*1.8)this.web.disturb(c.strand,.55);
         continue;
       }
       if(insect.rest>0){insect.rest-=dt;insect.group.children[1].rotation.z=Math.sin(t*10)*.08;insect.group.children[2].rotation.z=-Math.sin(t*10)*.08;continue;}
       if(insect.position.distanceTo(insect.target)<.2){
-        const strand=this.web.strands.size&&Math.random()<.72?[...this.web.strands.values()][Math.floor(Math.random()*this.web.strands.size)]:undefined;
-        if(strand){const [a,b]=this.web.getEndpoints(strand);insect.target.copy(a).lerp(b,random(.22,.78));}
+        const strand=this.web.strands.size&&Math.random()<.18?[...this.web.strands.values()][Math.floor(Math.random()*this.web.strands.size)]:undefined;
+        if(strand){this.web.sample(strand,random(.22,.78),insect.target);}
         else{
           insect.target.set(random(-19,19),Math.random()<.14?.3:random(.7,7),random(-15,16));
           if(insect.position.y<.5)insect.rest=random(1.5,3.8);

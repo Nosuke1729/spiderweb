@@ -380,3 +380,13 @@ h1 span {
     right:16px
   }
 }
+.discovery-count { margin-left:20px; color:#d6dac6; font-size:9px; letter-spacing:.12em; opacity:.8 }
+.reticle.blocked { opacity:.6 }
+.reticle.blocked i { background:#c2ad7e; box-shadow:none }
+.hint { font-size:9px; letter-spacing:.035em }
+.hint span { padding:0 6px }
+.sensitivity { display:flex; align-items:center; gap:18px; margin-top:25px; font-size:9px; letter-spacing:.17em; color:#d2d8c8 }
+.sensitivity input { width:116px; accent-color:#d8ddc3; cursor:pointer }
+.garden-notes { margin-top:25px; max-width:450px; padding:0 20px; font-size:11px; line-height:1.9; letter-spacing:.04em; color:#c5cbbd }
+.status { max-width:75%; white-space:normal; text-align:center; line-height:1.65 }
+@media(max-width:900px) { .hint {font-size:8px} .hint span {padding:0 3px} .discovery-count {margin-left:9px} }

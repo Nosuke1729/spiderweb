@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { strandPoint, strandSag, strandTangent } from './WebPath';
 
 export type WebNode={id:number;position:THREE.Vector3;strands:Set<number>};
 export type WebStrand={id:number;a:number;b:number;length:number;tension:number;integrity:number;energy:number;phase:number;pulse:number};
@@ -25,7 +26,7 @@ export class WebManager {
     this.rebuild();
   }
   private nearestNode(pos:THREE.Vector3){
-    let nearest:WebNode|undefined;let distance=.36;
+    let nearest:WebNode|undefined;let distance=.2;
     for(const node of this.nodes.values()){const d=node.position.distanceTo(pos);if(d<distance){distance=d;nearest=node;}}
     return nearest;
   }
@@ -35,9 +36,12 @@ export class WebManager {
   }
   add(a:THREE.Vector3,b:THREE.Vector3){
     if(a.distanceTo(b)<.45||this.strands.size>=240)return false;
+    const existingA=this.nearestNode(a),existingB=this.nearestNode(b);
+    if(existingA&&existingB){
+      if(existingA.id===existingB.id)return false;
+      for(const id of existingA.strands){const s=this.strands.get(id)!;if(s.a===existingB.id||s.b===existingB.id)return false;}
+    }
     const na=this.nodeAt(a),nb=this.nodeAt(b);
-    if(na.id===nb.id)return false;
-    for(const id of na.strands){const s=this.strands.get(id)!;if((s.a===na.id&&s.b===nb.id)||(s.b===na.id&&s.a===nb.id))return false;}
     const length=na.position.distanceTo(nb.position);
     const strand={id:this.nextStrand++,a:na.id,b:nb.id,length,tension:THREE.MathUtils.clamp(1-length/22,.32,.94),integrity:1,energy:.26,phase:Math.random()*6,pulse:0};
     this.strands.set(strand.id,strand);na.strands.add(strand.id);nb.strands.add(strand.id);
@@ -53,31 +57,42 @@ export class WebManager {
     this.positions=new Float32Array(this.strands.size*this.segments*2*3);
     this.colors=new Float32Array(this.positions.length);
     this.geometry.dispose();this.geometry=new THREE.BufferGeometry();
-    this.geometry.setAttribute('position',new THREE.BufferAttribute(this.positions,3));
-    this.geometry.setAttribute('color',new THREE.BufferAttribute(this.colors,3));
+    this.geometry.setAttribute('position',new THREE.BufferAttribute(this.positions,3).setUsage(THREE.DynamicDrawUsage));
+    this.geometry.setAttribute('color',new THREE.BufferAttribute(this.colors,3).setUsage(THREE.DynamicDrawUsage));
     this.line.geometry=this.geometry;
     this.geometry.setDrawRange(0,this.positions.length/3);
   }
   getEndpoints(s:WebStrand){return [this.nodes.get(s.a)!.position,this.nodes.get(s.b)!.position] as const;}
   getNearestPoint(position:THREE.Vector3,max=.65){
     let closest:{strand:WebStrand;point:THREE.Vector3;t:number;distance:number}|undefined;
+    const delta=new THREE.Vector3(),point=new THREE.Vector3(),last=new THREE.Vector3(),next=new THREE.Vector3();
     for(const s of this.strands.values()){
-      const [a,b]=this.getEndpoints(s);const delta=b.clone().sub(a);
-      const t=THREE.MathUtils.clamp(position.clone().sub(a).dot(delta)/delta.lengthSq(),0,1);
-      const point=a.clone().addScaledVector(delta,t);const distance=point.distanceTo(position);
-      if(distance<max&&(!closest||distance<closest.distance))closest={strand:s,point,t,distance};
+      const [a,b]=this.getEndpoints(s);delta.copy(b).sub(a);
+      const straightT=THREE.MathUtils.clamp(point.copy(position).sub(a).dot(delta)/delta.lengthSq(),0,1);
+      if(point.copy(a).addScaledVector(delta,straightT).distanceTo(position)>max+strandSag(s.length,s.tension))continue;
+      last.copy(a);
+      for(let i=0;i<this.segments;i++){
+        strandPoint(a,b,s.tension,(i+1)/this.segments,next);delta.copy(next).sub(last);
+        const u=THREE.MathUtils.clamp(point.copy(position).sub(last).dot(delta)/delta.lengthSq(),0,1);
+        point.copy(last).addScaledVector(delta,u);const distance=point.distanceTo(position);
+        if(distance<max&&(!closest||distance<closest.distance))closest={strand:s,point:point.clone(),t:(i+u)/this.segments,distance};
+        last.copy(next);
+      }
     }
     return closest;
   }
   aimStrand(origin:THREE.Vector3,direction:THREE.Vector3,max=16){
     let found:{strand:WebStrand;distance:number}|undefined;
-    const ray=new THREE.Ray(origin,direction);
+    const ray=new THREE.Ray(origin,direction),last=new THREE.Vector3(),next=new THREE.Vector3(),p=new THREE.Vector3();
     for(const s of this.strands.values()){
-      const [a,b]=this.getEndpoints(s);
-      const p=new THREE.Vector3(),q=new THREE.Vector3();
-      const d=ray.distanceSqToSegment(a,b,p,q);
-      const along=p.distanceTo(origin);
-      if(d<.1&&along<max&&(!found||along<found.distance))found={strand:s,distance:along};
+      const [a,b]=this.getEndpoints(s);last.copy(a);
+      for(let i=1;i<=this.segments;i++){
+        strandPoint(a,b,s.tension,i/this.segments,next);
+        const d=ray.distanceSqToSegment(last,next,p);
+        const along=p.distanceTo(origin);
+        if(d<.025&&along<max&&(!found||along<found.distance))found={strand:s,distance:along};
+        last.copy(next);
+      }
     }
     return found?.strand;
   }
@@ -90,9 +105,21 @@ export class WebManager {
       for(const nid of [s.a,s.b])for(const other of this.nodes.get(nid)!.strands)if(!seen.has(other))queue.push([other,e*.57]);
     }
   }
-  nextAt(nodeId:number,exclude:number){
+  nextAt(nodeId:number,exclude:number,wish?:THREE.Vector3){
     const node=this.nodes.get(nodeId);if(!node)return;
-    for(const id of node.strands)if(id!==exclude)return this.strands.get(id);
+    let best:WebStrand|undefined,score=-Infinity;
+    for(const id of node.strands){
+      if(id===exclude)continue;
+      const strand=this.strands.get(id)!;
+      const [a,b]=this.getEndpoints(strand);
+      const outgoing=strandTangent(a,b,strand.tension,strand.a===nodeId?0:1).multiplyScalar(strand.a===nodeId?1:-1);
+      const alignment=wish?outgoing.dot(wish):0;
+      if(alignment>score){score=alignment;best=strand;}
+    }
+    return best;
+  }
+  sample(strand:WebStrand,t:number,out=new THREE.Vector3()){
+    const [a,b]=this.getEndpoints(strand);return strandPoint(a,b,strand.tension,t,out);
   }
   components(){
     const groups:number[][]=[],seen=new Set<number>();
@@ -120,9 +147,7 @@ export class WebManager {
       const glow=s.energy*.64+s.pulse*.4;
       for(let k=0;k<this.segments;k++){
         for(const u of [k/this.segments,(k+1)/this.segments]){
-          const point=a.clone().lerp(b,u);
-          const sag=Math.min(.65,s.length*s.length*.006)*(1.15-s.tension*.45)*(1-(2*u-1)**2);
-          point.y-=sag;
+          const point=strandPoint(a,b,s.tension,u);
           const vibrate=Math.sin(u*21+t*34+s.phase)*Math.sin(u*Math.PI)*s.energy*.11;
           point.addScaledVector(lateral,vibrate);
           this.positions[index]=point.x;this.positions[index+1]=point.y;this.positions[index+2]=point.z;
@@ -142,13 +167,21 @@ export class WebManager {
   serialize():WebSave{return {nodes:[...this.nodes.values()].map(n=>({id:n.id,position:n.position.toArray()})),strands:[...this.strands.values()].map(s=>({id:s.id,a:s.a,b:s.b}))};}
   restore(data:WebSave){
     if(!data||!Array.isArray(data.nodes)||!Array.isArray(data.strands)||data.nodes.length>500||data.strands.length>240)return;
-    try{
-      for(const n of data.nodes){if(!Array.isArray(n.position)||n.position.length!==3||!n.position.every(Number.isFinite))return;this.nodes.set(n.id,{id:n.id,position:new THREE.Vector3().fromArray(n.position),strands:new Set()});this.nextNode=Math.max(this.nextNode,n.id+1);}
-      for(const s of data.strands){const a=this.nodes.get(s.a),b=this.nodes.get(s.b);if(!a||!b)continue;
-        const strand={id:s.id,a:s.a,b:s.b,length:a.position.distanceTo(b.position),tension:.7,integrity:1,energy:0,phase:Math.random()*6,pulse:0};
-        this.strands.set(s.id,strand);a.strands.add(s.id);b.strands.add(s.id);this.nextStrand=Math.max(this.nextStrand,s.id+1);
-      }
-      this.rebuild();
-    }catch{this.nodes.clear();this.strands.clear();this.rebuild();}
+    const nodes=new Map<number,WebNode>(),strands=new Map<number,WebStrand>();
+    for(const node of data.nodes){
+      if(!Number.isSafeInteger(node.id)||node.id<1||nodes.has(node.id)||!Array.isArray(node.position)||node.position.length!==3||!node.position.every(v=>Number.isFinite(v)&&Math.abs(v)<100))return;
+      nodes.set(node.id,{id:node.id,position:new THREE.Vector3().fromArray(node.position),strands:new Set()});
+    }
+    for(const entry of data.strands){
+      const a=nodes.get(entry.a),b=nodes.get(entry.b);
+      if(!Number.isSafeInteger(entry.id)||entry.id<1||strands.has(entry.id)||!a||!b||a===b)return;
+      const length=a.position.distanceTo(b.position);if(length<.1||length>100)return;
+      const strand={id:entry.id,a:entry.a,b:entry.b,length,tension:THREE.MathUtils.clamp(1-length/22,.32,.94),integrity:1,energy:0,phase:Math.random()*6,pulse:0};
+      strands.set(entry.id,strand);a.strands.add(entry.id);b.strands.add(entry.id);
+    }
+    this.nodes.clear();this.strands.clear();
+    for(const node of nodes.values())if(node.strands.size){this.nodes.set(node.id,node);this.nextNode=Math.max(this.nextNode,node.id+1);}
+    for(const strand of strands.values()){this.strands.set(strand.id,strand);this.nextStrand=Math.max(this.nextStrand,strand.id+1);}
+    this.rebuild();
   }
 }

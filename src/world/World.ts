@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { installTerrainRaycast } from './Terrain';
 
 const seed = (n: number) => {
   let x = n >>> 0;
@@ -15,7 +16,7 @@ function texture(kind: 'earth' | 'bark' | 'wood' | 'leaf'): THREE.CanvasTexture 
     earth: ['#5b503c', '#79694d', '#988261', '#3d4c36', '#b0a078'],
     bark: ['#302c25', '#4a3b30', '#65513c', '#8d7050', '#202922'],
     wood: ['#57432e', '#796047', '#a2825b', '#392f27', '#b09672'],
-    leaf: ['#4b6130', '#839744', '#a7a35b', '#3b582c', '#c9ac61'],
+    leaf: ['#819458', '#a4b579', '#c4ca8b', '#6a8652', '#d4c68a'],
   }[kind];
   c.fillStyle = colors[0]; c.fillRect(0, 0, 512, 512);
   for (let i = 0; i < 15000; i++) {
@@ -33,6 +34,10 @@ function texture(kind: 'earth' | 'bark' | 'wood' | 'leaf'): THREE.CanvasTexture 
       c.beginPath(); const x = rand() * 512;
       c.moveTo(x, 0); c.bezierCurveTo(x + between(-20, 20), 170, x + between(-20, 20), 350, x + between(-20, 20), 512); c.stroke();
     }
+  }
+  if(kind==='leaf'){
+    c.globalAlpha=.4;c.strokeStyle='#d4d499';c.lineWidth=2;c.beginPath();c.moveTo(256,0);c.lineTo(256,512);c.stroke();
+    for(let y=35;y<490;y+=32)for(const sign of [-1,1]){c.lineWidth=.8;c.beginPath();c.moveTo(256,y+38);c.quadraticCurveTo(256+sign*88,y-10,256+sign*235,y-34);c.stroke();}
   }
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -79,9 +84,9 @@ export class World {
     const sunGlow=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(sunCanvas),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));
     sunGlow.position.set(-20,18,-37);sunGlow.scale.set(23,23,1);scene.add(sunGlow);
     scene.add(this.group);
-    const ambient = new THREE.HemisphereLight(0xe8efdc, 0x6a5d45, 2.6);
+    const ambient = new THREE.HemisphereLight(0xe8efdc, 0x6a5d45, 1.9);
     scene.add(ambient);
-    const fill = new THREE.DirectionalLight(0xffebc9, 2.15);
+    const fill = new THREE.DirectionalLight(0xffebc9, 1.15);
     fill.position.set(12, 9, 8);
     scene.add(fill);
     this.sun.position.set(-15, 25, -18);
@@ -95,7 +100,8 @@ export class World {
     this.sun.shadow.normalBias = .035;
     this.sun.target.position.set(0, 0, -4);
     scene.add(this.sun, this.sun.target);
-    const gmat = new THREE.MeshStandardMaterial({ map: texture('earth'), roughness: .97, color: '#d9d2ad' });
+    const earth=texture('earth');
+    const gmat = new THREE.MeshStandardMaterial({ map: earth, bumpMap:earth, bumpScale:.065, roughness: .97, color: '#c8c3a3' });
     gmat.map!.repeat.set(12, 12);
     const groundGeometry = new THREE.PlaneGeometry(100, 100, 100, 100);
     groundGeometry.rotateX(-Math.PI / 2);
@@ -107,12 +113,14 @@ export class World {
     groundGeometry.computeVertexNormals();
     this.ground = new THREE.Mesh(groundGeometry, gmat);
     this.ground.receiveShadow = true;
+    installTerrainRaycast(this.ground,100,100);
     this.addSolid(this.ground);
     this.makeTree();
     this.makeFence();
     this.makeBench();
     this.makeRocks();
     this.makeTunnel();
+    this.makeLantern();
     this.makeMushrooms();
     this.makeFlowers();
     this.makeGrass();
@@ -120,6 +128,7 @@ export class World {
     this.makeLeaves();
     this.makeMossAndDew();
     this.makeWater();
+    this.makeFerns();
     this.makeMotes();
   }
 
@@ -128,14 +137,16 @@ export class World {
   }
 
   private addSolid(mesh: THREE.Mesh, anchor = true) {
+    mesh.geometry.computeBoundingBox();
     this.group.add(mesh);
     this.colliders.push(mesh);
     if (anchor) this.anchors.push(mesh);
   }
 
   private makeTree() {
-    const bark = new THREE.MeshStandardMaterial({ map: texture('bark'), roughness: 1, color: '#c5ae8d' });
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.2, 19, 20, 8), bark);
+    const barkTexture=texture('bark');
+    const bark = new THREE.MeshStandardMaterial({ map: barkTexture, bumpMap:barkTexture,bumpScale:.13, roughness: .96, color: '#baa187' });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.2, 19, 64, 12), bark);
     trunk.position.set(-9, 8.8, -8);
     trunk.castShadow = trunk.receiveShadow = true;
     this.addSolid(trunk);
@@ -152,7 +163,7 @@ export class World {
       const theta = i * Math.PI * 2 / 9 + .15;
       const a = new THREE.Vector3(-9 + Math.cos(theta) * 1.2, .4, -8 + Math.sin(theta) * 1.2);
       const b = new THREE.Vector3(-9 + Math.cos(theta) * between(4, 6), .12, -8 + Math.sin(theta) * between(4, 6));
-      const root = cylinderBetween(a, b, between(.18, .38), bark, 8);
+      const root = cylinderBetween(a, b, between(.18, .38), bark, 24);
       this.addSolid(root);
     }
     const branchEnds = [
@@ -161,11 +172,15 @@ export class World {
       [[-9, 8, -8], [-18, 9, -10]], [[-9, 4, -8], [-6, 3, -1]],
     ];
     branchEnds.forEach(([a, b], i) => {
-      const branch = cylinderBetween(new THREE.Vector3(...a), new THREE.Vector3(...b), i === 5 ? .5 : .35, bark, 10);
+      const branch = cylinderBetween(new THREE.Vector3(...a), new THREE.Vector3(...b), i === 5 ? .5 : .35, bark, 24);
       this.addSolid(branch);
     });
     // Low, broad branch: an early opportunity to climb, leap, and anchor silk.
-    this.addSolid(cylinderBetween(new THREE.Vector3(-6, 2.8, -1), new THREE.Vector3(3, 2.1, 2), .42, bark, 12));
+    this.addSolid(cylinderBetween(new THREE.Vector3(-6, 2.8, -1), new THREE.Vector3(3, 2.1, 2), .42, bark, 24));
+    // These branches form a loop from the roots through the lantern to the fence.
+    this.addSolid(cylinderBetween(new THREE.Vector3(-4,4,-12),new THREE.Vector3(3.3,2.3,-10.8),.26,bark,24));
+    this.addSolid(cylinderBetween(new THREE.Vector3(4.2,2.3,-11),new THREE.Vector3(1.4,5.35,-17.9),.23,bark,24));
+    this.addSolid(cylinderBetween(new THREE.Vector3(6,.7,1.5),new THREE.Vector3(9.1,.35,5.1),.24,bark,20));
     const log = cylinderBetween(new THREE.Vector3(-4, .65, 10), new THREE.Vector3(7, .9, 1), 1.05, bark, 16);
     this.addSolid(log);
     const rim = new THREE.Mesh(new THREE.TorusGeometry(.98, .17, 8, 24), bark);
@@ -175,7 +190,8 @@ export class World {
   }
 
   private makeFence() {
-    const wood = new THREE.MeshStandardMaterial({ map: texture('wood'), roughness: .94, color: '#a89170' });
+    const grain=texture('wood');
+    const wood = new THREE.MeshStandardMaterial({ map: grain,bumpMap:grain,bumpScale:.075, roughness: .94, color: '#a89170' });
     const dark = new THREE.MeshStandardMaterial({ color: '#514735', roughness: 1 });
     for (let i = -9; i <= 9; i++) {
       const x = i * 2.05;
@@ -207,24 +223,28 @@ export class World {
       leg.position.set(x, 1.5, z); leg.castShadow = true; this.addSolid(leg);
     }
     for (let j = 0; j < 4; j++) {
-      const plank = new THREE.Mesh(new THREE.BoxGeometry(5.5, .28, 1.42), wood);
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(6.4, .28, 1.6), wood);
       plank.position.set(11.3, 3.13, -10.2 + j * 1.4);
       plank.castShadow = plank.receiveShadow = true; this.addSolid(plank);
     }
     for (const z of [-11.1, -5]) {
-      const rim = new THREE.Mesh(new THREE.BoxGeometry(5.8, .75, .22), wood);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(6.65, .75, .22), wood);
       rim.position.set(11.3, 3.45, z); rim.castShadow = true; this.addSolid(rim);
     }
   }
 
   private makeRocks() {
-    const stone = new THREE.MeshStandardMaterial({ color: '#777c70', roughness: 1, flatShading: true });
+    const stone = new THREE.MeshStandardMaterial({ color: '#777c70', roughness: .95, flatShading: false });
     const moss = new THREE.MeshStandardMaterial({ color: '#456039', roughness: 1 });
     const spots = [[3, -2, 1.4], [4, -11, 2.3], [-12, 4, 2], [17, 3, 1.7], [-18, -3, 2.5], [1, 13, 1.1], [6, 12, 1.9]];
     for (const [x, z, s] of spots) {
       const geo = new THREE.IcosahedronGeometry(s, 2);
       const pos = geo.attributes.position;
-      for (let i = 0; i < pos.count; i++) pos.setXYZ(i, pos.getX(i) * between(.78, 1.15), pos.getY(i) * between(.55, .85), pos.getZ(i) * between(.8, 1.13));
+      for (let i = 0; i < pos.count; i++) {
+        const x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);
+        const noise=1+Math.sin(x*3.1+y*2.7+z*1.8)*.075+Math.cos(z*4.3-x*1.2)*.04;
+        pos.setXYZ(i,x*noise,y*noise*.7,z*noise*.94);
+      }
       geo.computeVertexNormals();
       const rock = new THREE.Mesh(geo, stone);
       rock.position.set(x, this.height(x, z) + s * .48, z); rock.rotation.y = rand() * 6;
@@ -364,14 +384,24 @@ export class World {
   }
 
   private makeLeaves() {
-    const leaf = new THREE.BufferGeometry();
-    leaf.setAttribute('position',new THREE.Float32BufferAttribute([
-      0,0,-.55, -.24,0,-.16, 0,.055,-.12, .24,0,-.16,
-      -.34,0,.18, 0,.075,.12, .34,0,.18, 0,0,.55
-    ],3));
-    leaf.setIndex([0,1,2,0,2,3,1,4,5,1,5,2,2,5,6,2,6,3,4,7,5,5,7,6]);
-    leaf.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({color:'#d1dca2',roughness:1,side:THREE.DoubleSide,emissive:'#253312',emissiveIntensity:.12});
+    const leaf = new THREE.BufferGeometry(),vertices:number[]=[],uv:number[]=[],indices:number[]=[];
+    for(let j=0;j<=8;j++){
+      const t=j/8,w=Math.sin(t*Math.PI)*.34;
+      for(const side of [-1,0,1]){vertices.push(side*w,Math.sin(t*Math.PI)*(.09-Math.abs(side)*.055),(t-.5)*1.1);uv.push((side+1)*.5,t);}
+      if(j<8)for(let k=0;k<2;k++){const a=j*3+k;indices.push(a,a+3,a+1,a+1,a+3,a+4);}
+    }
+    leaf.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+    leaf.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));leaf.setIndex(indices);leaf.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({map:texture('leaf'),color:'#d6e1b5',roughness:.83,side:THREE.DoubleSide,alphaHash:true});
+    mat.onBeforeCompile=shader=>{
+      shader.uniforms.uWind=this.windUniform;
+      shader.vertexShader='uniform float uWind; varying vec3 vLeafWorld;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+        transformed.x += sin(uWind*.8+instanceMatrix[3].x*.7+instanceMatrix[3].z)*.035*position.z;
+        vLeafWorld=(modelMatrix*instanceMatrix*vec4(transformed,1.)).xyz;`);
+      shader.fragmentShader='varying vec3 vLeafWorld;\n'+shader.fragmentShader;
+      shader.fragmentShader=shader.fragmentShader.replace('#include <alphahash_fragment>',`diffuseColor.a*=smoothstep(.65,1.6,distance(vLeafWorld,cameraPosition));\n#include <alphahash_fragment>`);
+    };
     const mesh=new THREE.InstancedMesh(leaf,mat,650); const d=new THREE.Object3D(); const c=new THREE.Color();
     for(let i=0;i<650;i++) {
       const isCanopy=i<440; const angle=rand()*Math.PI*2; const r=isCanopy?between(2,10):between(4,22);
@@ -422,6 +452,54 @@ export class World {
     this.water=new THREE.Mesh(geo,material); this.water.position.set(11,.035,7); this.group.add(this.water);
     const ring=new THREE.Mesh(new THREE.TorusGeometry(3.7,.12,6,64),new THREE.MeshStandardMaterial({color:'#726a50',roughness:1}));
     ring.rotation.x=Math.PI/2; ring.position.copy(this.water.position); this.group.add(ring);
+  }
+
+  private makeLantern(){
+    const metal=new THREE.MeshStandardMaterial({color:'#374940',metalness:.58,roughness:.55});
+    const rim=new THREE.MeshStandardMaterial({color:'#a88b54',metalness:.55,roughness:.56});
+    const baseY=2.55,x=4,z=-11;
+    for(const [y,radius,height] of [[baseY,.61,.18],[baseY+1.55,.62,.12]]){
+      const cap=new THREE.Mesh(new THREE.CylinderGeometry(radius*.94,radius,height,32),metal);
+      cap.position.set(x,y,z);cap.castShadow=cap.receiveShadow=true;this.addSolid(cap);
+    }
+    const roof=new THREE.Mesh(new THREE.ConeGeometry(.63,.36,32),metal);roof.position.set(x,baseY+1.78,z);roof.castShadow=true;this.addSolid(roof);
+    for(let i=0;i<4;i++){
+      const angle=Math.PI*.25+i*Math.PI*.5,dx=Math.cos(angle)*.42,dz=Math.sin(angle)*.42;
+      this.addSolid(cylinderBetween(new THREE.Vector3(x+dx,baseY,z+dz),new THREE.Vector3(x+dx,baseY+1.6,z+dz),.038,rim,8));
+    }
+    const glass=new THREE.Mesh(new THREE.CylinderGeometry(.47,.47,1.35,24,1,true),new THREE.MeshPhysicalMaterial({color:'#d2c6a3',roughness:.18,metalness:.04,transparent:true,opacity:.19,side:THREE.DoubleSide,depthWrite:false}));
+    glass.position.set(x,baseY+.77,z);this.group.add(glass);
+    const wick=new THREE.Mesh(new THREE.CylinderGeometry(.18,.23,.18,16),rim);wick.position.set(x,baseY+.16,z);this.group.add(wick);
+    const ember=new THREE.Mesh(new THREE.SphereGeometry(.065,12,8),new THREE.MeshBasicMaterial({color:'#ffe2a0'}));ember.position.set(x,baseY+.3,z);ember.scale.y=1.8;this.group.add(ember);
+    const light=new THREE.PointLight('#ffc377',.6,4,2);light.position.copy(ember.position);this.group.add(light);
+    const handle=new THREE.Mesh(new THREE.TorusGeometry(.36,.035,8,32,Math.PI),metal);handle.position.set(x,baseY+1.92,z);handle.castShadow=true;this.addSolid(handle);
+  }
+
+  private makeFerns(){
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute([0,0,-.48,-.12,.018,-.2,0,.055,0,.12,.018,-.2,-.14,.025,.18,0,.04,.25,.14,.025,.18,0,0,.48],3));
+    geo.setAttribute('uv',new THREE.Float32BufferAttribute([.5,0,0,.25,.5,.5,1,.25,0,.65,.5,.75,1,.65,.5,1],2));
+    geo.setIndex([0,1,2,0,2,3,1,4,2,2,4,5,2,5,6,2,6,3,4,7,5,5,7,6]);geo.computeVertexNormals();
+    const mat=new THREE.MeshStandardMaterial({map:texture('leaf'),color:'#e9edca',roughness:.85,side:THREE.DoubleSide});
+    mat.onBeforeCompile=shader=>{
+      shader.uniforms.uWind=this.windUniform;shader.vertexShader='uniform float uWind;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+        transformed.y+=sin(uWind*.9+instanceMatrix[3].x+instanceMatrix[3].z)*.035*abs(position.z);`);
+    };
+    const count=72*24,ferns=new THREE.InstancedMesh(geo,mat,count),d=new THREE.Object3D(),color=new THREE.Color();
+    for(let i=0;i<72;i++){
+      const theta=i*2.399963,r=between(3,11);let x=-9+Math.cos(theta)*r,z=-8+Math.sin(theta)*r;
+      if((x+3)**2+(z+2.5)**2<25){x=-9+(x+9)*.4;z=-8+(z+8)*.4;}
+      const y=this.height(x,z);
+      for(let j=0;j<24;j++){
+        const frond=Math.floor(j/8),pair=Math.floor((j%8)/2),side=j%2===0?-1:1;
+        const angle=theta+frond*Math.PI*2/3,length=.35+pair*.22,width=.45-pair*.065;
+        d.position.set(x+Math.cos(angle)*length,y+.12+Math.sin(length*.9)*.42,z+Math.sin(angle)*length);
+        d.rotation.set(-.12+pair*.11,angle+side*.63,.12*side);d.scale.set(width*1.5,1,.55+width);
+        d.updateMatrix();ferns.setMatrixAt(i*24+j,d.matrix);color.set(['#a4bc7b','#c7d79a','#8faf72'][i%3]);ferns.setColorAt(i*24+j,color);
+      }
+    }
+    ferns.instanceMatrix.needsUpdate=true;ferns.receiveShadow=true;ferns.computeBoundingSphere();this.group.add(ferns);
   }
 
   private makeMotes() {

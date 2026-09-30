@@ -1,69 +1,85 @@
 import * as THREE from 'three';
+import { surfaceRotation } from '../player/SurfaceMath';
 
 export class SpiderCamera {
-  readonly camera:THREE.PerspectiveCamera;
-  readonly heading=new THREE.Vector3(-.65,0,-.76).normalize();
-  readonly normal=new THREE.Vector3(0,1,0);
-  private previousNormal=new THREE.Vector3(0,1,0);
-  private pitch=.38;
-  private distance=3.8;
-  private aim=false;
-  private ray=new THREE.Raycaster();
-  private focus=new THREE.Vector3();
-  private initialized=false;
-  constructor(private colliders:THREE.Object3D[],aspect:number){
-    this.camera=new THREE.PerspectiveCamera(64,aspect,.025,95);
-    this.camera.position.set(0,1.2,3);
+  readonly camera: THREE.PerspectiveCamera;
+  readonly heading = new THREE.Vector3(-.65, 0, -.76).normalize();
+  readonly normal = new THREE.Vector3(0, 1, 0);
+  sensitivity = 1;
+  private referenceNormal = new THREE.Vector3(0, 1, 0);
+  private pitch = .35;
+  private orbitDistance = 3.8;
+  private distance = 3.8;
+  private aim = false;
+  private ray = new THREE.Raycaster();
+  private focus = new THREE.Vector3();
+  private rig = new THREE.Quaternion();
+  private initialized = false;
+
+  constructor(private colliders: THREE.Object3D[], aspect: number) {
+    this.camera = new THREE.PerspectiveCamera(64, aspect, .025, 95);
   }
-  resize(w:number,h:number){this.camera.aspect=w/h;this.camera.updateProjectionMatrix();}
-  look(dx:number,dy:number){
-    this.heading.applyAxisAngle(this.normal,-dx*.0026).projectOnPlane(this.normal).normalize();
-    this.pitch=THREE.MathUtils.clamp(this.pitch+dy*.0023,-.23,1.1);
+  resize(w: number, h: number) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
+  look(dx: number, dy: number) {
+    this.heading.applyAxisAngle(this.referenceNormal, -dx * .003 * this.sensitivity).normalize();
+    this.pitch = THREE.MathUtils.clamp(this.pitch + dy * .0028 * this.sensitivity, -1.2, 1.32);
   }
-  setAim(on:boolean){this.aim=on;}
-  forward(){return this.heading.clone().projectOnPlane(this.normal).normalize();}
-  right(){return new THREE.Vector3().crossVectors(this.forward(),this.normal).normalize();}
-  update(position:THREE.Vector3,surfaceNormal:THREE.Vector3,dt:number){
-    // Parallel transport keeps the view direction coherent through wall and ceiling turns.
-    const wasWall=Math.abs(this.previousNormal.y)<.35;
-    const inward=this.previousNormal.clone().negate();
-    const q=new THREE.Quaternion().setFromUnitVectors(this.previousNormal,surfaceNormal);
-    this.heading.applyQuaternion(q).projectOnPlane(surfaceNormal).normalize();
-    if(wasWall&&surfaceNormal.y<-.7)this.heading.copy(inward).projectOnPlane(surfaceNormal).normalize();
-    this.previousNormal.copy(surfaceNormal);
-    this.normal.lerp(surfaceNormal,1-Math.exp(-8*dt)).normalize();
-    const target=position.clone().addScaledVector(surfaceNormal,.17).addScaledVector(this.heading,.55);
-    if(!this.initialized)this.focus.copy(target);
-    else this.focus.lerp(target,1-Math.exp(-10*dt));
-    const desiredDistance=this.aim?2.1:3.8;
-    this.distance=THREE.MathUtils.lerp(this.distance,desiredDistance,1-Math.exp(-7*dt));
-    const desired=this.focus.clone()
-      .addScaledVector(this.heading,-Math.cos(this.pitch)*this.distance)
-      .addScaledVector(this.normal,Math.sin(this.pitch)*this.distance+.12);
-    const direction=desired.clone().sub(this.focus);const length=direction.length();direction.normalize();
-    this.ray.set(this.focus,direction);this.ray.far=length;
-    const hit=this.ray.intersectObjects(this.colliders,false)[0];
-    if(hit)desired.copy(this.focus).addScaledVector(direction,Math.max(.28,hit.distance-.16));
-    // Keep the spider visible when an offset boulder or leaf edge blocks the view.
-    const visibilityDirection=desired.clone().sub(position);
-    const visibilityDistance=visibilityDirection.length();visibilityDirection.normalize();
-    this.ray.set(position,visibilityDirection);this.ray.far=visibilityDistance;
-    const occluder=this.ray.intersectObjects(this.colliders,false)[0];
-    if(occluder&&occluder.distance<visibilityDistance-.1){
-      const side=new THREE.Vector3().crossVectors(this.normal,visibilityDirection).normalize();
-      let clear=false;
-      for(const sign of [1,-1]){
-        const shifted=desired.clone().addScaledVector(side,sign*1.15);
-        const toward=shifted.clone().sub(position);const reach=toward.length();toward.normalize();
-        this.ray.set(position,toward);this.ray.far=reach;
-        if(!this.ray.intersectObjects(this.colliders,false).length){desired.copy(shifted);clear=true;break;}
-      }
-      if(!clear)desired.copy(position).addScaledVector(visibilityDirection,Math.max(.36,occluder.distance-.2));
+  zoom(delta: number) { this.orbitDistance = THREE.MathUtils.clamp(this.orbitDistance * Math.exp(delta * .001), 1.65, 6.5); }
+  recenter(heading: THREE.Vector3) { this.heading.copy(heading).projectOnPlane(this.referenceNormal).normalize(); this.pitch = .35; }
+  setAim(on: boolean) { this.aim = on; }
+  forward(surface = this.referenceNormal) {
+    return this.heading.clone().applyQuaternion(surfaceRotation(this.referenceNormal, surface, this.heading)).projectOnPlane(surface).normalize();
+  }
+  right(surface = this.referenceNormal) { return new THREE.Vector3().crossVectors(this.forward(surface), surface).normalize(); }
+
+  private clearDistance(focus: THREE.Vector3, direction: THREE.Vector3, distance: number, right: THREE.Vector3, up: THREE.Vector3) {
+    let clear = distance;
+    for (const [x, y] of [[0, 0], [.13, 0], [-.13, 0], [0, .13], [0, -.13]]) {
+      this.ray.set(focus.clone().addScaledVector(right, x).addScaledVector(up, y), direction);
+      this.ray.far = distance;
+      const hit = this.ray.intersectObjects(this.colliders, false)[0];
+      if (hit) clear = Math.min(clear, Math.max(.18, hit.distance - .16));
     }
-    if(!this.initialized)this.camera.position.copy(desired);
-    else this.camera.position.lerp(desired,1-Math.exp(-13*dt));
+    return clear;
+  }
+
+  update(position: THREE.Vector3, surface: THREE.Vector3, dt: number, velocity = new THREE.Vector3()) {
+    if(!this.initialized){
+      this.referenceNormal.copy(surface);this.heading.projectOnPlane(surface);
+      if(this.heading.lengthSq()<.01)this.heading.set(0,0,-1).projectOnPlane(surface);
+      if(this.heading.lengthSq()<.01)this.heading.set(1,0,0).projectOnPlane(surface);
+      this.heading.normalize();
+    }
+    this.heading.applyQuaternion(surfaceRotation(this.referenceNormal, surface, this.heading)).projectOnPlane(surface).normalize();
+    this.referenceNormal.copy(surface);
+    const right = new THREE.Vector3().crossVectors(this.heading, surface).normalize();
+    const targetRig = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, surface, this.heading.clone().negate()));
+    if (!this.initialized) this.rig.copy(targetRig);
+    else this.rig.slerp(targetRig, 1 - Math.exp(-11 * dt));
+    this.normal.set(0, 1, 0).applyQuaternion(this.rig);
+    const viewHeading = new THREE.Vector3(0, 0, -1).applyQuaternion(this.rig);
+    const viewRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.rig);
+    const target = position.clone().addScaledVector(surface, .18).addScaledVector(viewHeading, this.aim ? .2 : .35)
+      .addScaledVector(velocity, this.aim ? 0 : .075);
+    if (!this.initialized) this.focus.copy(target);
+    else this.focus.lerp(target, 1 - Math.exp(-16 * dt));
+    const desiredDistance = this.aim ? Math.min(2.6, this.orbitDistance) : this.orbitDistance;
+    this.distance = THREE.MathUtils.lerp(this.distance, desiredDistance, 1 - Math.exp(-9 * dt));
+    const direction = viewHeading.clone().multiplyScalar(-Math.cos(this.pitch)).addScaledVector(this.normal, Math.sin(this.pitch)).normalize();
+    const clear = this.clearDistance(this.focus, direction, this.distance, viewRight, this.normal);
+    const desired = this.focus.clone().addScaledVector(direction, clear);
+    if (!this.initialized) this.camera.position.copy(desired);
+    else {
+      const inward = this.camera.position.distanceTo(this.focus) > clear + .05;
+      this.camera.position.lerp(desired, 1 - Math.exp(-(inward ? 28 : 12) * dt));
+      const actual = this.camera.position.clone().sub(this.focus);
+      const actualDistance = actual.length(); actual.normalize();
+      const safe = this.clearDistance(this.focus, actual, actualDistance, viewRight, this.normal);
+      this.camera.position.copy(this.focus).addScaledVector(actual, safe);
+    }
     this.camera.up.copy(this.normal);
     this.camera.lookAt(this.focus);
-    this.initialized=true;
+    this.camera.updateMatrixWorld();
+    this.initialized = true;
   }
 }

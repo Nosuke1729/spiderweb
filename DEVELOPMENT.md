@@ -2,38 +2,63 @@
 
 ## Architecture
 
-- `src/core/Game.ts`: lifecycle, UI events, saves, rendering, and subsystem coordination.
-- `src/core/Input.ts`: keyboard, pointer lock, and cursor fallback.
-- `src/world/World.ts`: procedural garden, collidable surfaces, instanced vegetation, shader wind, water, lighting, and atmosphere.
+- `src/core/Game.ts`: lifecycle, UI, versioned saves, fixed physics steps, and subsystem coordination.
+- `src/core/Input.ts`: keyboard, pointer lock, drag orbit fallback, click versus drag detection, and zoom.
+- `src/world/World.ts`: procedural garden, surfaces, instanced vegetation, shader wind, water, lighting, and atmosphere.
+- `src/world/Terrain.ts`: grid traversal for terrain raycasting, preserving the rendered triangle intersections.
+- `src/world/Exploration.ts`: six habitats, visit conditions, discoveries, and exploration hints.
 - `src/player/Spider.ts`: articulated procedural character.
-- `src/player/SpiderController.ts`: support probes, normal averaging, surface transport, leap, and silk traversal.
-- `src/camera/SpiderCamera.ts`: parallel transported view direction, orbit, follow smoothing, and camera collision.
-- `src/web/WebManager.ts`: graph nodes and strands, connected components, silk rendering, vibration propagation, and serialization.
-- `src/creatures/InsectManager.ts`: lightweight wandering and web contact.
-- `src/audio/AudioManager.ts`: synthesized wind, attachment, cut, and vibration sounds.
+- `src/player/SurfaceMath.ts`: interpolated vertex normals, correct normal transforms, and tangent frame rotation.
+- `src/player/SpiderController.ts`: surface probes, corner traversal, leaping, silk travel, and pose smoothing.
+- `src/camera/SpiderCamera.ts`: transported orbit frame, pitch, distance, look sensitivity, anticipation, and collision sweeps.
+- `src/web/SilkLauncher.ts`: projectile travel, first contact, range, trailing silk, pending anchor, and span obstruction checks.
+- `src/web/WebPath.ts`: shared strand sag and tangent functions used by rendering, picking, insects, and traversal.
+- `src/web/WebManager.ts`: graph, connected components, silk rendering, vibration propagation, and serialization.
+- `src/creatures/InsectManager.ts`: wandering, web contact, temporary entanglement, and close interaction.
+- `src/audio/AudioManager.ts`: generated wind, movement, attachment, and vibration sounds.
 
-The garden uses PBR materials, procedural canvas textures, one shadow casting sun, fill and hemisphere light, exponential fog, instancing, a low cost wind vertex deformation, and restrained bloom. Silk is one dynamic line buffer with per vertex color. Each strand has a spring inspired oscillation and a decaying graph pulse. A hard cap of 240 strands bounds work. The low quality setting reduces pixel ratio, turns off bloom, and disables shadows.
+## Controls and camera
 
-## Surface movement
+Mouse motion orbits while pointer lock is available. If the browser rejects pointer lock, dragging either mouse button orbits; a left click fires only if the press did not become a drag. The fallback reticle follows the actual cursor. Mouse wheel changes orbit distance, Q recenters, and the pause menu exposes sensitivity. Losing a previously active pointer lock pauses safely.
 
-The controller probes forward for a new surface and probes the current support direction from the projected next position. The center probe controls placement; nearby side probes contribute normals and catch narrow edges. Surface changes parallel transport the spider and camera heading, then interpolate the visible orientation. The leap has simple ballistic motion and can stick on contact. This is a custom movement controller, not a rigid body physics engine.
+The orbit frame follows surface orientation through quaternion interpolation, including ceilings. Pitch permits looking up and down. A five-ray camera sweep accounts for lens clearance and is repeated after follow smoothing to prevent interpolation through obstacles. Camera controls do not alter the spider's heading until movement is requested.
 
-Climbable collision geometry includes terrain, tree trunk and roots, branches, rocks, fence boards and rails, log, a discarded drainage pipe, seed tray and supports, and mushroom stalks and caps. The pipe is a walk-through tunnel. The seed tray's underside is available as a ceiling route from its legs.
+## Movement
+
+Physics runs at 120 fixed steps per second, decoupled from rendering. Support probes blend nearby compatible normals, and triangle barycentric interpolation avoids the visible steps of cylinder face normals. Normal transformation supports scaled meshes and the inside of the pipe. Forward contact probes turn onto concave surfaces; probes beyond a lip can wrap convex edges. The controller preserves tangential movement and smooths support height, preventing idle sliding and the old reduction in walking speed. The body orientation interpolates separately.
+
+Tree roots, higher branches, the lantern rock, and the fence form a traversal loop. Other paths include the low branch, fallen log, pool bank, seed tray underside, and pipe passage. Narrow gaps can be bridged with silk or crossed with a leap.
+
+## Silk and encounters
+
+Silk launches from the spider at 21 world units/second with a maximum shot range of 12 units. A swept ray over each simulation interval checks the first actual contact; camera aiming does not bypass obstacles between the spider and the target. A missed shot creates no nodes. Two landed shots form a maximum 18-unit span only if the sagged path is clear. The pending anchor keeps a visible loose thread to the spider and is released if the player exceeds its length. R cancels a shot or loose anchor before cutting a completed strand.
+
+Rendering, nearest-point queries, cutting, insect targets, and player traversal share the same curve. At a junction, camera direction and A/D bias choose the outgoing strand. The spider returns to the surface supporting an endpoint or falls if it has no support. Cutting the strand being ridden detaches the spider. Insects remain caught up to 18 seconds and are released by a cut. Web sense audio and text occur when the spider is near the disturbed network.
+
+Exploration records six actual visited habitats rather than floating items. Progress and encountered insects are shown in the pause menu; discoveries briefly describe the place. No mandatory route is imposed.
+
+## Rendering and performance
+
+PBR materials, procedural surface relief and leaf veins, one shadow casting sun, fill and hemisphere lighting, exponential fog, instanced grass/ferns/foliage, shader wind, and restrained bloom form the garden. Canopy leaves fade with alpha hashing when close to the lens. Stone vertices now use a coordinate-based displacement so duplicate vertices remain connected. A small lantern light adds a recognizable destination.
+
+Terrain rays traverse only crossed cells instead of testing all 20,000 ground triangles. Static collision geometry has bounding boxes. Silk uses one dynamic line buffer and a lightweight oscillation/graph pulse model. A cap of 240 strands bounds work. Low quality reduces pixel ratio and turns off bloom and shadows.
 
 ## Saves
 
-`localStorage` key: `spiderweb-garden-v2`. The save format is versioned and contains world coordinates for nodes and player position, strand endpoints by node id, quality, and sound preference. Invalid or outdated saves are ignored so the scene can still load. Saves are local to the browser.
+The existing `spiderweb-garden-v2` localStorage key is retained to migrate existing progress. Format version 3 adds surface normal, heading, sensitivity, visited habitats, and encounter count. Version 2 saves are accepted; surface orientation is inferred from nearby geometry when absent. Web restores validate an entire graph before replacing the current graph. Invalid values, outdated formats, and unavailable storage do not block startup. An in-flight shot and loose anchor are intentionally temporary.
+
+## Verification
+
+`npm test` uses the existing TypeScript compiler and Node's test runner; it adds no dependencies. Regression checks cover travel before impact, first obstruction, range misses, connected shots, obstructed spans, curve agreement, junction choice, terrain ray equivalence, cylinder seams, ground/wall/ceiling transitions, camera rotations, discovery conditions, corrupt saves, restored surface orientation, and idle stability. GitHub Actions runs these before type checking and building.
+
+The development HUD exposes position, normal, graph, encounters, traversal mode, projectile state, and FPS. Local `?qa=wall`, `?qa=ceiling`, `?qa=insect`, `?qa=ride`, `?qa=stress`, and `?qa=fresh` scenarios exercise the main systems. These routes and the debug HUD are removed from production and use no normal save slot.
 
 ## Known limitations and next improvements
 
-- Surface transitions work best when the spider approaches the connecting edge. Tiny disconnected gaps require a leap.
-- Silk motion is a lightweight visual spring model, not full cloth simulation.
-- Insects have simple steering and temporary entanglement; there is no combat or resource economy.
-- Silk is currently anchored in world coordinates. Moving vegetation does not pull existing anchors with it.
-- The puddle uses stylized ripples and color reflection, not real time planar reflection.
-- There are no touch controls yet. Desktop performance and pointer lock are the main target.
-- A future pass can add silk suspension, more insect behaviors, richer close up foliage, spatial audio, and further draw call reduction.
-
-The development build shows a small position, surface normal, graph, pointer, and FPS readout. This is removed from production builds.
-
-For repeatable browser checks, the development server also accepts `?qa=wall`, `?qa=ceiling`, `?qa=insect`, `?qa=ride`, `?qa=stress`, and `?qa=fresh`. These local routes exercise sustained movement, underside traversal, a web catch, connected strand traversal, a 160 strand load, and a clean start. They are excluded from the production build and do not write test state to the normal save slot.
+- Movement uses a custom adhesion controller, not rigid body physics. Very thin disconnected surfaces and gaps still require a leap.
+- Silk uses a visible spring approximation; the loose tether does not simulate wrapping around obstacles. Permanent spans are checked for obstructions.
+- Flexible grass and detached canopy leaves are visual foliage rather than permanent silk supports.
+- Insects have lightweight steering and encounters, without combat or a full food economy.
+- The puddle uses stylized ripple and color reflection, without real time planar reflection.
+- Touch controls and silk suspension are future additions. Desktop keyboard and mouse remain the target.
+- Leg contact animation, further material detail, spatial audio, and richer insect behavior are worthwhile next passes.
