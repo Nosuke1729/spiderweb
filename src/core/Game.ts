@@ -13,8 +13,9 @@ import { AudioManager } from '../audio/AudioManager';
 import { Input } from './Input';
 import { SilkLauncher } from '../web/SilkLauncher';
 import { Exploration } from '../world/Exploration';
+import { OUTER_HABITATS } from '../world/WorldLayout';
 
-type Save={version:2|3;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;sensitivity?:number;discovered?:string[];catches?:number};
+type Save={version:2|3|4;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;sensitivity?:number;discovered?:string[];catches?:number};
 const saveKey='spiderweb-garden-v2';
 
 export class Game {
@@ -53,6 +54,7 @@ export class Game {
   private reticle:HTMLElement;
   private prompt:HTMLElement;
   private status:HTMLElement;
+  private silkAim=new THREE.Mesh(new THREE.SphereGeometry(.045,8,6),new THREE.MeshBasicMaterial({color:'#d5f4ef',transparent:true,opacity:.8,depthWrite:false}));
   private debug?:HTMLElement;
   private qa='';
   private qaDone=false;
@@ -66,7 +68,7 @@ export class Game {
         <div class="loading" id="loading">Growing the garden…</div>
         <div class="mobile-notice">Spiderweb is designed for a desktop browser with a mouse and keyboard.<br><small>Touch controls are planned.</small></div>
         <div class="hud" id="hud">
-          <div class="hud-top"><div class="location"><span class="sun-mark">✺</span><span id="zone">THE UNDERGROWTH</span></div><div class="silk-count"><span class="silk-icon">◇</span> <span id="count">0</span> strands <span class="discovery-count" id="discoveries">0 / 6 places</span></div></div>
+          <div class="hud-top"><div class="location"><span class="sun-mark">✺</span><span id="zone">THE UNDERGROWTH</span></div><div class="silk-count"><span class="silk-icon">◇</span> <span id="count">0</span> strands <span class="discovery-count" id="discoveries">0 / ${this.exploration.total} places</span></div></div>
           <div class="aim-prompt" id="prompt"></div>
           <div class="reticle" id="reticle"><i></i><i></i><i></i><i></i></div>
           <div class="status" id="status"></div>
@@ -102,6 +104,7 @@ export class Game {
     this.root.querySelector('.viewport')!.appendChild(this.canvas);
     this.world=new World(this.scene);this.scene.updateMatrixWorld(true);
     this.web=new WebManager(this.scene);
+    this.silkAim.visible=false;this.scene.add(this.silkAim);
     this.spider=new Spider(this.scene);
     this.camera=new SpiderCamera(this.world.colliders,innerWidth/innerHeight);
     this.input=new Input(this.canvas);
@@ -120,7 +123,14 @@ export class Game {
     if(import.meta.env.DEV)this.qa=new URLSearchParams(location.search).get('qa')??'';
     this.setupControls();if(!this.qa)this.load();this.resize();
     if(import.meta.env.DEV){
-      if(this.qa==='wall'||this.qa==='ceiling'){
+      if(['arch','orchard','meadow','pot','outer'].includes(this.qa)){
+        const point=this.qa==='outer'?{x:39,z:29}:OUTER_HABITATS.find(h=>h.id===this.qa)!;
+        const x=point.x-5,z=point.z+5;
+        this.controller.position.set(x,this.world.height(x,z)+.3,z);
+        this.controller.heading.set(.707,0,-.707);this.camera.heading.copy(this.controller.heading);
+        this.started=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');
+        if(this.qa==='outer'){this.controller.heading.set(1,0,0);this.camera.heading.copy(this.controller.heading);this.input.keys.add('ShiftLeft');this.qaMovementRemaining=6;}
+      }else if(this.qa==='wall'||this.qa==='ceiling'){
         if(this.qa==='wall'){
           this.controller.position.set(-6.3,.3,-8);
           this.controller.heading.set(-1,0,0);
@@ -184,8 +194,9 @@ export class Game {
       const next=this.web.nextAt(nodeId,id,wish);if(!next)return;
       const [a,b]=this.web.getEndpoints(next);
       const t=next.a===nodeId?0:1;
-      return {id:next.id,a,b,t,direction:(t===0?1:-1)*drive,tension:next.tension};
+      return {id:next.id,a,b,t,direction:(t===0?1:-1)*drive,tension:next.tension,sag:next.sag};
     };
+    this.web.onSplit=(id,parts)=>{this.controller.remapStrand(id,parts,s=>this.web.getEndpoints(s));this.insects.remapStrand(id,parts);};
     this.web.onChange=()=>{this.updateCount();this.save();};
     this.insects.onCatch=()=>{
       const near=this.web.getNearestPoint(this.controller.position,1.6);
@@ -201,7 +212,7 @@ export class Game {
     this.audio.start();void this.input.lock().then(locked=>this.message(locked?'Look toward a surface and click to fire silk. Wheel zooms; Q centers the view.':'Drag to look around. Click to fire silk; wheel zooms; Q centers the view.'));
     this.updateDiscoveries();
   }
-  private pause(){this.input.clear();this.updateDiscoveries();this.paused=true;this.pauseScreen.classList.remove('hidden');this.hud.classList.remove('visible');this.input.unlock();this.save();}
+  private pause(){this.input.clear();this.silkAim.visible=false;this.updateDiscoveries();this.paused=true;this.pauseScreen.classList.remove('hidden');this.hud.classList.remove('visible');this.input.unlock();this.save();}
   private resume(){this.paused=false;this.pauseScreen.classList.add('hidden');this.hud.classList.add('visible');void this.input.lock();}
   private aimRay(){
     this.ray.setFromCamera(this.input.locked?new THREE.Vector2(0,0):new THREE.Vector2(this.input.pointer.x,this.input.pointer.y),this.camera.camera);
@@ -211,7 +222,8 @@ export class Game {
     if(!this.started||this.paused)return;
     const ray=this.aimRay();
     const hit=ray.intersectObjects(this.world.anchors.filter(o=>!(o instanceof THREE.InstancedMesh)),false)[0];
-    const target=hit?.point??ray.ray.at(40,new THREE.Vector3());
+    const silk=this.web.raycast(ray.ray.origin,ray.ray.direction,hit?.distance??60);
+    const target=silk?.point??hit?.point??ray.ray.at(40,new THREE.Vector3());
     this.launcher.shoot(target);
   }
   private cut(){
@@ -229,7 +241,7 @@ export class Game {
     const nearest=this.web.getNearestPoint(this.controller.position,.65);
     if(nearest&&!this.controller.isRiding()){
       const [a,b]=this.web.getEndpoints(nearest.strand);
-      this.controller.ride(a,b,nearest.t,nearest.strand.id,1,nearest.strand.tension);this.web.disturb(nearest.strand.id,.55);
+      this.controller.ride(a,b,nearest.t,nearest.strand.id,1,nearest.strand.tension,nearest.strand.sag);this.web.disturb(nearest.strand.id,.55);
       this.message('W/S travel along silk. Look toward a branch at junctions; Space leaps away.');
     }else this.message('Move closer to a strand or caught insect.');
   }
@@ -237,7 +249,8 @@ export class Game {
   private updateCount(){this.el('count').textContent=String(this.web.strands.size);}
   private updateZone(){
     const p=this.controller.position;
-    this.el('zone').textContent=p.y>4?'ABOVE THE UNDERGROWTH':p.z< -12?'THE OLD FENCE':p.x< -5&&p.z<0?'THE ROOTS':p.x>7&&p.z>3?'THE RAIN POOL':'THE UNDERGROWTH';
+    const outer=OUTER_HABITATS.find(h=>Math.hypot(p.x-h.x,p.z-h.z)<h.radius+7);
+    this.el('zone').textContent=outer?.name??(p.y>4?'ABOVE THE UNDERGROWTH':p.z< -24?'BEYOND THE FENCE':Math.abs(p.x)>26||p.z>23?'THE OPEN GARDEN':p.z< -12?'THE OLD FENCE':p.x< -5&&p.z<0?'THE ROOTS':p.x>7&&p.z>3?'THE RAIN POOL':'THE UNDERGROWTH');
   }
   private updateDiscoveries(){
     this.el('discoveries').textContent=`${this.exploration.discovered.size} / ${this.exploration.total} places`;
@@ -247,23 +260,27 @@ export class Game {
     if(!this.started||this.paused)return;
     const ray=this.aimRay();
     const hit=ray.intersectObjects(this.world.colliders,false)[0];
-    const preview=hit?this.launcher.preview(hit.point):undefined;
+    const silk=this.web.raycast(ray.ray.origin,ray.ray.direction,hit?.distance??60);
+    const target=silk?.point??hit?.point;
+    const preview=target?this.launcher.preview(target):undefined;
     const ready=!!preview?.hit&&preview.inRange&&!preview.blocked;
     this.reticle.classList.toggle('active',ready);this.reticle.classList.toggle('blocked',!!hit&&!ready);
+    this.reticle.classList.toggle('on-silk',!!silk&&ready);
+    this.silkAim.visible=!!silk&&ready&&!this.launcher.flying;if(silk)this.silkAim.position.copy(silk.point);
     this.reticle.style.left=this.input.locked?'50%':`${(this.input.pointer.x+1)*50}%`;
     this.reticle.style.top=this.input.locked?'50%':`${(1-this.input.pointer.y)*50}%`;
     const near=this.web.getNearestPoint(this.controller.position,.65);
-    this.prompt.textContent=this.launcher.flying?'SILK IN FLIGHT':this.controller.isRiding()?'W/S · FOLLOW SILK · SPACE TO LEAP':near&&!this.launcher.pending?'E · TRAVERSE SILK':this.launcher.pending?'CLICK · FIRE SECOND ANCHOR':ready?'CLICK · FIRE SILK':hit?'MOVE CLOSER · FIND A CLEAR SHOT':'';
+    this.prompt.textContent=this.launcher.flying?'SILK IN FLIGHT':silk&&ready?'CLICK · JOIN THIS THREAD':this.controller.isRiding()?'W/S · FOLLOW SILK · SPACE TO LEAP':near&&!this.launcher.pending?'E · TRAVERSE SILK':this.launcher.pending?'CLICK · FIRE SECOND ANCHOR':ready?'CLICK · FIRE SILK':target?'MOVE CLOSER · FIND A CLEAR SHOT':'';
     this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>R</b> cut`;
   }
   private save(){
     if(this.qa)return;
-    try{const data:Save={version:3,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
+    try{const data:Save={version:4,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
   }
   private load(){
     try{
       const value=localStorage.getItem(saveKey);if(!value)return;const data=JSON.parse(value) as Save;
-      if(data.version!==2&&data.version!==3)return;
+      if(data.version!==2&&data.version!==3&&data.version!==4)return;
       this.controller.restore(data.player,data.normal,data.heading);
       this.camera.heading.copy(this.controller.heading);
       this.camera.sensitivity=typeof data.sensitivity==='number'&&Number.isFinite(data.sensitivity)?THREE.MathUtils.clamp(data.sensitivity,.4,1.8):1;
@@ -282,7 +299,7 @@ export class Game {
   private resize(){this.renderer.setSize(innerWidth,innerHeight);this.camera.resize(innerWidth,innerHeight);this.composer.setSize(innerWidth,innerHeight);}
   private frame=(now:number)=>{
     const dt=Math.min(.05,(now-this.last)/1000);this.last=now;this.time+=dt;
-    this.world.update(this.time,dt);
+    this.world.update(this.time,dt,this.controller.position);
     if(this.started&&!this.paused){
       if(import.meta.env.DEV&&this.qaMovementRemaining>0){
         this.qaMovementRemaining-=dt;
@@ -306,7 +323,7 @@ export class Game {
       this.camera.update(this.controller.position,this.controller.normal,dt);
       this.insects.update(this.time,dt);
     }
-    this.web.update(this.time,dt,this.world.sun.position.clone().normalize(),this.camera.camera.position);
+    this.web.update(this.time,dt,this.world.sunDirection,this.camera.camera.position);
     if(this.debug&&Math.floor(this.time*4)!==Math.floor((this.time-dt)*4)){
       const p=this.controller.position,n=this.controller.normal;
       this.debug.textContent=`DEV  ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}  N ${n.x.toFixed(1)} ${n.y.toFixed(1)} ${n.z.toFixed(1)}  ${this.web.strands.size}S/${this.web.components().length}C  ${this.insects.insects.filter(i=>i.caught).length} caught  ${this.controller.isRiding()?'RIDING':'SURFACE'}  ${this.input.locked?'LOCK':'DRAG'} ${this.launcher.flying?'FLIGHT':this.launcher.pending?'ANCHOR':'READY'}  ${Math.round(1/Math.max(dt,.001))} FPS ${this.qa?this.qa.toUpperCase()+(this.qaDone?' DONE':' RUNNING'):''}`;

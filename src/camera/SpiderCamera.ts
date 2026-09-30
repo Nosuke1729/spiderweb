@@ -17,7 +17,7 @@ export class SpiderCamera {
   private initialized = false;
 
   constructor(private colliders: THREE.Object3D[], aspect: number) {
-    this.camera = new THREE.PerspectiveCamera(64, aspect, .025, 95);
+    this.camera = new THREE.PerspectiveCamera(64, aspect, .025, 280);
   }
   resize(w: number, h: number) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
   look(dx: number, dy: number) {

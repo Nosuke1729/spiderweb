@@ -1,6 +1,6 @@
 # Spiderweb
 
-A browser based 3D exploration game about a small spider in an overgrown garden. Climb the tree and fence, move under the seed tray, and build your own routes by attaching silk to surfaces. Strands form a connected network that carries vibrations when insects touch it.
+A browser based 3D exploration game about a small spider in an overgrown garden. Climb trees and the fence, move under the seed tray, explore the orchard and meadow, and build your own routes by joining silk to surfaces and other threads. Strands form a connected network that carries vibrations when insects touch it.
 
 The entire game is static. It runs in the browser with WebGL and stores progress locally. No server, account, or Node.js runtime is needed after build.
 
@@ -22,9 +22,9 @@ Play at [nosuke1729.github.io/spiderweb](https://nosuke1729.github.io/spiderweb/
 | R | Cut the aimed strand or cancel the loose anchor |
 | Escape | Pause |
 
-Aim at a solid surface and click to fire silk. The projectile travels from the spider, lands on the first surface it meets, and has a limited range. Then fire at another surface to complete the strand. A span crossing wood, stone, or terrain is rejected. Moving grass and loose canopy leaves cannot hold a permanent anchor. Click near an existing node to extend the network.
+Aim at a solid surface and click to fire silk. The projectile travels from the spider, lands on the first surface it meets, and has a limited range. Then fire at another surface to complete the strand. A span crossing wood, stone, or terrain is rejected. Moving grass and loose canopy leaves cannot hold a permanent anchor. Aim at any part of an existing thread: a small glint and **CLICK · JOIN THIS THREAD** show the attachment point. Fire there, then at another thread or surface. The original threads split at real graph junctions, allowing a frame, spokes, and cross-links to grow into your own web. Connected junctions carry vibrations and let the spider change paths. Merely overlapping threads are not automatically glued; fire at a thread to join it.
 
-Approach silk and press **E** to climb onto it. W/S travel along its actual sagging curve; look toward the outgoing branch at a junction, or bias the choice with A/D. Space leaps off. Follow a vibration to a caught insect and press E when close. Discover six habitats by reaching the roots, canopy, fence, pipe passage, rain pool, and lantern. Discoveries and web encounters are recorded quietly in the pause menu.
+Approach silk and press **E** to climb onto it. W/S travel along its actual sagging curve; look toward the outgoing branch at a junction, or bias the choice with A/D. Space leaps off. Follow a vibration to a caught insect and press E when close. Discover eleven habitats: the roots, canopy, fence, pipe passage, rain pool, lantern, orchard, stone arch, wildflower meadow, clay refuge, and eastern grove. The terrain is 180 × 180 world units; vegetation and landmarks extend across roughly 156 × 156 units. Walk through the opening in the old fence, around either end, or over its ridge. Paths, roots, and fallen limbs create multiple routes; bridge gaps with your own silk. Discoveries and web encounters are recorded quietly in the pause menu.
 
 Use Escape for the pause menu and the look sensitivity slider. The garden retains its minimal HUD. A brief hint explains drag controls whenever pointer lock is unavailable.
 

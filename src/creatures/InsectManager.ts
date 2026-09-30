@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { WebManager } from '../web/WebManager';
+import { WebManager, type StrandReplacement } from '../web/WebManager';
+import { OUTER_HABITATS,gardenHeight } from '../world/WorldLayout';
 
-type Insect={group:THREE.Group;position:THREE.Vector3;velocity:THREE.Vector3;target:THREE.Vector3;phase:number;rest:number;caught?:{strand:number;time:number;point:THREE.Vector3}};
+type Insect={group:THREE.Group;position:THREE.Vector3;velocity:THREE.Vector3;target:THREE.Vector3;home:THREE.Vector3;phase:number;rest:number;caught?:{strand:number;time:number;point:THREE.Vector3}};
 const random=(a:number,b:number)=>a+Math.random()*(b-a);
 
 export class InsectManager {
@@ -12,7 +13,7 @@ export class InsectManager {
   constructor(private scene:THREE.Scene,private web:WebManager){
     const bodyMat=new THREE.MeshStandardMaterial({color:'#242c2a',metalness:.3,roughness:.4});
     const warmMat=new THREE.MeshBasicMaterial({color:'#e6ba6b'});
-    for(let i=0;i<18;i++){
+    for(let i=0;i<36;i++){
       const group=new THREE.Group();const isMoth=i%6===0;
       const body=new THREE.Mesh(new THREE.SphereGeometry(isMoth?.082:.045,8,6),isMoth?warmMat:bodyMat);
       body.scale.z=1.5;group.add(body);
@@ -20,8 +21,10 @@ export class InsectManager {
         const wing=new THREE.Mesh(new THREE.SphereGeometry(isMoth?.12:.085,7,5),this.wingMat);
         wing.scale.set(.9,.04,.48);wing.position.set(side*.08,.035,0);group.add(wing);
       }
-      const p=new THREE.Vector3(random(-18,18),random(1,6),random(-14,15));group.position.copy(p);scene.add(group);
-      this.insects.push({group,position:p,velocity:new THREE.Vector3(),target:p.clone(),phase:random(0,7),rest:0});
+      const habitat=i<18?undefined:OUTER_HABITATS[(i-18)%OUTER_HABITATS.length];
+      const home=habitat?new THREE.Vector3(habitat.x,gardenHeight(habitat.x,habitat.z),habitat.z):new THREE.Vector3();
+      const p=home.clone().add(new THREE.Vector3(random(-8,8),random(1,6),random(-8,8)));group.position.copy(p);scene.add(group);
+      this.insects.push({group,position:p,velocity:new THREE.Vector3(),target:p.clone(),home,phase:random(0,7),rest:0});
     }
   }
   update(t:number,dt:number){
@@ -34,22 +37,23 @@ export class InsectManager {
         insect.position.copy(c.point).add(new THREE.Vector3(Math.sin(t*22+i)*.025,Math.sin(t*30+i)*.025,Math.cos(t*24+i)*.025));
         insect.group.position.copy(insect.position);
         insect.group.rotation.z=Math.sin(t*23)*.3;
-        if(c.time>18){insect.caught=undefined;insect.target.set(random(-18,18),random(1,6),random(-14,14));}
+        if(c.time>18){insect.caught=undefined;this.wanderTarget(insect);}
         else if(Math.random()<dt*1.8)this.web.disturb(c.strand,.55);
         continue;
       }
       if(insect.rest>0){insect.rest-=dt;insect.group.children[1].rotation.z=Math.sin(t*10)*.08;insect.group.children[2].rotation.z=-Math.sin(t*10)*.08;continue;}
       if(insect.position.distanceTo(insect.target)<.2){
-        const strand=this.web.strands.size&&Math.random()<.18?[...this.web.strands.values()][Math.floor(Math.random()*this.web.strands.size)]:undefined;
+        const localStrands=Math.random()<.18?[...this.web.strands.values()].filter(s=>this.web.sample(s,.5).distanceTo(insect.position)<18):[];
+        const strand=localStrands[Math.floor(Math.random()*localStrands.length)];
         if(strand){this.web.sample(strand,random(.22,.78),insect.target);}
         else{
-          insect.target.set(random(-19,19),Math.random()<.14?.3:random(.7,7),random(-15,16));
-          if(insect.position.y<.5)insect.rest=random(1.5,3.8);
+          this.wanderTarget(insect);
+          if(insect.position.y<gardenHeight(insect.position.x,insect.position.z)+.5)insect.rest=random(1.5,3.8);
         }
       }
       const drive=insect.target.clone().sub(insect.position).normalize().multiplyScalar(1.18);
       drive.y+=Math.sin(t*3+insect.phase)*.18;
-      if(insect.position.y<.45)drive.y+=.75;
+      if(insect.position.y<gardenHeight(insect.position.x,insect.position.z)+.45)drive.y+=.75;
       const awayTree=insect.position.clone().sub(new THREE.Vector3(-9,insect.position.y,-8));awayTree.y=0;
       if(awayTree.length()<2.1&&insect.position.y<17)drive.addScaledVector(awayTree.normalize(),.7);
       insect.velocity.lerp(drive,1-Math.exp(-2.5*dt));
@@ -63,7 +67,19 @@ export class InsectManager {
     }
   }
   collectNear(position:THREE.Vector3){
-    for(const insect of this.insects){if(insect.caught&&insect.position.distanceTo(position)<.8){insect.caught=undefined;insect.position.set(random(-18,18),random(2,6),random(-14,14));insect.target.copy(insect.position);return true;}}
+    for(const insect of this.insects){if(insect.caught&&insect.position.distanceTo(position)<.8){insect.caught=undefined;this.wanderTarget(insect);insect.position.copy(insect.target);return true;}}
     return false;
+  }
+  remapStrand(id:number,parts:StrandReplacement[]){
+    for(const insect of this.insects)if(insect.caught?.strand===id){
+      const nearest=this.web.getNearestPoint(insect.caught.point,.2);
+      if(nearest&&parts.some(p=>p.strand.id===nearest.strand.id))insect.caught.strand=nearest.strand.id;
+      else insect.caught.strand=parts[0].strand.id;
+    }
+  }
+  private wanderTarget(insect:Insect){
+    const extent=insect.home.lengthSq()>.1?10:19;
+    const x=insect.home.x+random(-extent,extent),z=insect.home.z+random(-extent,extent);
+    insect.target.set(x,gardenHeight(x,z)+(Math.random()<.14?.3:random(.7,7)),z);
   }
 }

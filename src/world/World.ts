@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { installTerrainRaycast } from './Terrain';
+import { ExpandedGarden } from './ExpandedGarden';
+import { gardenHeight,TERRAIN_SIZE } from './WorldLayout';
 
 const seed = (n: number) => {
   let x = n >>> 0;
@@ -8,7 +10,7 @@ const seed = (n: number) => {
 const rand = seed(1729);
 const between = (a: number, b: number) => a + (b - a) * rand();
 
-function texture(kind: 'earth' | 'bark' | 'wood' | 'leaf'): THREE.CanvasTexture {
+function texture(kind: 'earth' | 'bark' | 'wood' | 'leaf' | 'stone'): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 512;
   const c = canvas.getContext('2d')!;
@@ -17,6 +19,7 @@ function texture(kind: 'earth' | 'bark' | 'wood' | 'leaf'): THREE.CanvasTexture 
     bark: ['#302c25', '#4a3b30', '#65513c', '#8d7050', '#202922'],
     wood: ['#57432e', '#796047', '#a2825b', '#392f27', '#b09672'],
     leaf: ['#819458', '#a4b579', '#c4ca8b', '#6a8652', '#d4c68a'],
+    stone: ['#75817b','#9aa398','#b8bca9','#626f6d','#d4d2bd'],
   }[kind];
   c.fillStyle = colors[0]; c.fillRect(0, 0, 512, 512);
   for (let i = 0; i < 15000; i++) {
@@ -61,6 +64,7 @@ export class World {
   readonly anchors: THREE.Object3D[] = [];
   readonly ground: THREE.Mesh;
   readonly sun = new THREE.DirectionalLight(0xffd8a3, 4.3);
+  readonly sunDirection=new THREE.Vector3(-15,25,-14).normalize();
   private windUniform = { value: 0 };
   private motes!: THREE.Points;
   private motePositions!: Float32Array;
@@ -69,11 +73,11 @@ export class World {
 
   constructor(scene: THREE.Scene) {
     scene.background = new THREE.Color('#c6c6aa');
-    scene.fog = new THREE.FogExp2('#bfc1a1', .014);
-    const sky=new THREE.Mesh(new THREE.SphereGeometry(88,32,16),new THREE.ShaderMaterial({
+    scene.fog = new THREE.FogExp2('#bfc1a1', .010);
+    const sky=new THREE.Mesh(new THREE.SphereGeometry(235,32,16),new THREE.ShaderMaterial({
       side:THREE.BackSide,depthWrite:false,fog:false,
       vertexShader:`varying vec3 vWorld; void main(){vWorld=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader:`varying vec3 vWorld; void main(){float h=clamp(vWorld.y/88.,-.25,1.);vec3 horizon=vec3(.88,.78,.63);vec3 top=vec3(.50,.64,.66);vec3 below=vec3(.48,.52,.43);vec3 col=h<0.?mix(below,horizon,smoothstep(-.25,0.,h)):mix(horizon,top,smoothstep(0.,.85,h));gl_FragColor=vec4(col,1.);}`
+      fragmentShader:`varying vec3 vWorld; void main(){float h=clamp(vWorld.y/235.,-.25,1.);vec3 horizon=vec3(.88,.78,.63);vec3 top=vec3(.50,.64,.66);vec3 below=vec3(.48,.52,.43);vec3 col=h<0.?mix(below,horizon,smoothstep(-.25,0.,h)):mix(horizon,top,smoothstep(0.,.85,h));gl_FragColor=vec4(col,1.);}`
     }));
     sky.frustumCulled=false;scene.add(sky);
     const sunCanvas=document.createElement('canvas');sunCanvas.width=sunCanvas.height=128;
@@ -95,15 +99,15 @@ export class World {
     this.sun.shadow.camera.left = this.sun.shadow.camera.bottom = -29;
     this.sun.shadow.camera.right = this.sun.shadow.camera.top = 29;
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 80;
+    this.sun.shadow.camera.far = 120;
     this.sun.shadow.bias = -.0003;
     this.sun.shadow.normalBias = .035;
     this.sun.target.position.set(0, 0, -4);
     scene.add(this.sun, this.sun.target);
     const earth=texture('earth');
     const gmat = new THREE.MeshStandardMaterial({ map: earth, bumpMap:earth, bumpScale:.065, roughness: .97, color: '#c8c3a3' });
-    gmat.map!.repeat.set(12, 12);
-    const groundGeometry = new THREE.PlaneGeometry(100, 100, 100, 100);
+    gmat.map!.repeat.set(21.6, 21.6);
+    const groundGeometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SIZE);
     groundGeometry.rotateX(-Math.PI / 2);
     const p = groundGeometry.attributes.position;
     for (let i = 0; i < p.count; i++) {
@@ -113,7 +117,7 @@ export class World {
     groundGeometry.computeVertexNormals();
     this.ground = new THREE.Mesh(groundGeometry, gmat);
     this.ground.receiveShadow = true;
-    installTerrainRaycast(this.ground,100,100);
+    installTerrainRaycast(this.ground,TERRAIN_SIZE,TERRAIN_SIZE);
     this.addSolid(this.ground);
     this.makeTree();
     this.makeFence();
@@ -130,10 +134,15 @@ export class World {
     this.makeWater();
     this.makeFerns();
     this.makeMotes();
+    const outerWoodTexture=texture('bark');
+    const outerWood=new THREE.MeshStandardMaterial({map:outerWoodTexture,bumpMap:outerWoodTexture,bumpScale:.12,color:'#baa187',roughness:.97});
+    const outerStoneTexture=texture('stone');outerStoneTexture.repeat.set(2,2);
+    const outerStone=new THREE.MeshStandardMaterial({map:outerStoneTexture,bumpMap:outerStoneTexture,bumpScale:.09,color:'#d0d7cf',roughness:.93});
+    new ExpandedGarden(this.group,mesh=>this.addSolid(mesh),outerWood,outerStone,this.windUniform,texture('leaf'));
   }
 
   height(x: number, z: number): number {
-    return .19 * Math.sin(x * .37) * Math.cos(z * .28) + .09 * Math.sin(x * 1.4 + z * .8) + .012 * Math.sin(x * 8) * Math.cos(z * 7);
+    return gardenHeight(x,z);
   }
 
   private addSolid(mesh: THREE.Mesh, anchor = true) {
@@ -194,6 +203,7 @@ export class World {
     const wood = new THREE.MeshStandardMaterial({ map: grain,bumpMap:grain,bumpScale:.075, roughness: .94, color: '#a89170' });
     const dark = new THREE.MeshStandardMaterial({ color: '#514735', roughness: 1 });
     for (let i = -9; i <= 9; i++) {
+      if(i===5||i===6)continue; // A ground-level opening invites exploration beyond the fence.
       const x = i * 2.05;
       const h = between(5.3, 7.7);
       const board = new THREE.Mesh(new THREE.BoxGeometry(1.85, h, .43), wood);
@@ -209,8 +219,10 @@ export class World {
       }
     }
     for (const y of [2.4, 5]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(39, .35, .6), wood);
-      rail.position.set(0, y, -18.4); rail.castShadow = true; this.addSolid(rail);
+      for(const [x,width] of [[-4.5,28.9],[16.7,5.8]]){
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(width, .35, .6), wood);
+        rail.position.set(x, y, -18.4); rail.castShadow = true; this.addSolid(rail);
+      }
     }
   }
 
@@ -510,9 +522,13 @@ export class World {
     this.motes=new THREE.Points(geo,mat); this.group.add(this.motes);
   }
 
-  update(t: number, dt: number) {
+  update(t: number, dt: number, focus?:THREE.Vector3) {
     this.windUniform.value=t;
     this.waterTime.value=t;
+    if(focus){
+      const x=Math.round(focus.x/4)*4,z=Math.round(focus.z/4)*4;
+      this.sun.target.position.set(x,0,z);this.sun.position.set(x-15,25,z-14);
+    }
     const p=this.motePositions;
     for(let i=0;i<p.length;i+=3){p[i]+=.05*dt;p[i+1]+=(.03+Math.sin(t*.7+i)*.015)*dt;if(p[i]>28)p[i]=-28;if(p[i+1]>14)p[i+1]=.4;}
     this.motes.geometry.attributes.position.needsUpdate=true;

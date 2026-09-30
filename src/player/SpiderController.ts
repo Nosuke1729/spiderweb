@@ -3,7 +3,9 @@ import { Spider } from './Spider';
 import { SpiderCamera } from '../camera/SpiderCamera';
 import { Input } from '../core/Input';
 import { surfaceNormal, surfaceRotation } from './SurfaceMath';
-import { strandPoint, strandTangent } from '../web/WebPath';
+import { strandPoint, strandTangent, strandSag } from '../web/WebPath';
+import type { StrandReplacement } from '../web/WebManager';
+import { MAX_SAVE_POSITION } from '../world/WorldLayout';
 
 const clearance = .245;
 export class SpiderController {
@@ -17,14 +19,14 @@ export class SpiderController {
   private ray = new THREE.Raycaster();
   private orientation = new THREE.Quaternion();
   private lastDrive = new THREE.Vector3();
-  private webRide?: { a: THREE.Vector3; b: THREE.Vector3; t: number; id: number; direction: number; tension: number };
-  onRideEnd: (id: number, end: 'a' | 'b', drive: number, wish: THREE.Vector3) => { id: number; a: THREE.Vector3; b: THREE.Vector3; t: number; direction: number; tension: number } | undefined = () => undefined;
+  private webRide?: { a: THREE.Vector3; b: THREE.Vector3; t: number; id: number; direction: number; tension: number; sag:number };
+  onRideEnd: (id: number, end: 'a' | 'b', drive: number, wish: THREE.Vector3) => { id: number; a: THREE.Vector3; b: THREE.Vector3; t: number; direction: number; tension: number; sag:number } | undefined = () => undefined;
 
   constructor(private spider: Spider, private camera: SpiderCamera, private input: Input, private colliders: THREE.Object3D[]) {
     spider.group.position.copy(this.position);
   }
   restore(p: number[], n?: number[], h?: number[]) {
-    if (!Array.isArray(p) || p.length !== 3 || !p.every(Number.isFinite) || Math.abs(p[0]) > 40 || Math.abs(p[1]) > 30 || Math.abs(p[2]) > 40) return;
+    if (!Array.isArray(p) || p.length !== 3 || !p.every(Number.isFinite) || Math.abs(p[0]) > MAX_SAVE_POSITION || Math.abs(p[1]) > 45 || Math.abs(p[2]) > MAX_SAVE_POSITION) return;
     this.position.fromArray(p);
     if (Array.isArray(n) && n.length === 3 && n.every(Number.isFinite) && new THREE.Vector3().fromArray(n).lengthSq() > .5) this.normal.fromArray(n).normalize();
     if (!n) {
@@ -50,8 +52,14 @@ export class SpiderController {
     this.airborne = true;
     this.leapVelocity.copy(this.normal).multiplyScalar(3.8).addScaledVector(this.heading, Math.max(1.3, this.speed * .8));
   }
-  ride(a: THREE.Vector3, b: THREE.Vector3, t: number, id: number, direction = 1, tension = .7) {
-    this.webRide = { a, b, t, id, direction, tension }; this.airborne = false;
+  ride(a: THREE.Vector3, b: THREE.Vector3, t: number, id: number, direction = 1, tension = .7,sag=strandSag(a.distanceTo(b),tension)) {
+    this.webRide = { a, b, t, id, direction, tension,sag }; this.airborne = false;
+  }
+  remapStrand(id:number,parts:StrandReplacement[],endpoints:(s:StrandReplacement['strand'])=>readonly[THREE.Vector3,THREE.Vector3]){
+    const ride=this.webRide;if(!ride||ride.id!==id)return;
+    const part=parts.find(p=>ride.t<=p.to)??parts[parts.length-1];
+    const [a,b]=endpoints(part.strand);
+    this.ride(a,b,(ride.t-part.from)/(part.to-part.from),part.strand.id,ride.direction,part.strand.tension,part.strand.sag);
   }
   isRiding() { return !!this.webRide; }
   rideId() { return this.webRide?.id; }
@@ -86,18 +94,18 @@ export class SpiderController {
       const travel = (this.input.pressed('KeyW', 'ArrowUp') ? 1 : 0) - (this.input.pressed('KeyS', 'ArrowDown') ? 1 : 0);
       const length = ride.a.distanceTo(ride.b);
       ride.t = THREE.MathUtils.clamp(ride.t + travel * ride.direction * dt * (running ? 3.2 : 1.9) / Math.max(.4, length), 0, 1);
-      const tangent = strandTangent(ride.a, ride.b, ride.tension, ride.t).multiplyScalar(travel ? travel * ride.direction : ride.direction);
+      const tangent = strandTangent(ride.a, ride.b, ride.tension, ride.t,ride.sag).multiplyScalar(travel ? travel * ride.direction : ride.direction);
       const up = new THREE.Vector3(0, 1, 0).projectOnPlane(tangent);
       if (up.lengthSq() < .05) up.copy(this.normal).projectOnPlane(tangent);
       if (up.lengthSq() < .05) up.set(1, 0, 0).projectOnPlane(tangent);
       this.transport(up.normalize()); this.heading.copy(tangent);
-      strandPoint(ride.a, ride.b, ride.tension, ride.t, this.position).addScaledVector(this.normal, clearance);
+      strandPoint(ride.a, ride.b, ride.tension, ride.t, this.position,ride.sag).addScaledVector(this.normal, clearance);
       if (travel && (ride.t === 0 || ride.t === 1)) {
         const wish = this.camera.forward(this.normal).multiplyScalar(travel);
         if (this.input.pressed('KeyD')) wish.addScaledVector(this.camera.right(this.normal), .9);
         if (this.input.pressed('KeyA')) wish.addScaledVector(this.camera.right(this.normal), -.9);
         const next = this.onRideEnd(ride.id, ride.t === 0 ? 'a' : 'b', travel, wish.normalize());
-        if (next) this.ride(next.a, next.b, next.t, next.id, next.direction, next.tension);
+        if (next) this.ride(next.a, next.b, next.t, next.id, next.direction, next.tension,next.sag);
         else {
           this.webRide = undefined;
           // Return to the surface supporting the anchor before falling.

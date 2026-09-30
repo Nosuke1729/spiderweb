@@ -1,15 +1,14 @@
 import * as THREE from 'three';
 import { surfaceNormal } from '../player/SurfaceMath';
-import { WebManager } from './WebManager';
+import { WebManager, type WebAnchor } from './WebManager';
 import { strandPoint } from './WebPath';
 
 export const SILK_RANGE = 12;
 export const SILK_SPAN = 18;
-type Anchor = { position: THREE.Vector3; normal: THREE.Vector3 };
 type Shot = { position: THREE.Vector3; direction: THREE.Vector3; distance: number };
 
 export class SilkLauncher {
-  pending?: Anchor;
+  pending?: WebAnchor;
   private shot?: Shot;
   private ray = new THREE.Raycaster();
   private head: THREE.Mesh;
@@ -36,7 +35,9 @@ export class SilkLauncher {
     const origin = this.emitter(), direction = target.clone().sub(origin).normalize();
     this.ray.set(origin, direction); this.ray.near = .015; this.ray.far = SILK_RANGE;
     const hit = this.ray.intersectObjects(this.surfaces, false)[0];
-    return { hit, inRange: target.distanceTo(origin) <= SILK_RANGE, blocked: !!hit && hit.point.distanceTo(target) > .25 };
+    const silk=this.web.raycast(origin,direction,Math.min(SILK_RANGE,hit?.distance??SILK_RANGE),.1,.32);
+    const contact=silk??hit;
+    return { hit:contact, inRange: target.distanceTo(origin) <= SILK_RANGE, blocked: !!contact && contact.point.distanceTo(target) > .25 };
   }
   shoot(target: THREE.Vector3) {
     if (this.shot) return false;
@@ -71,22 +72,29 @@ export class SilkLauncher {
   }
   private land(hit: THREE.Intersection, direction: THREE.Vector3) {
     const normal = surfaceNormal(hit, direction);
-    const anchor = { position: hit.point.clone().addScaledVector(normal, .065), normal };
+    this.landAnchor({position:hit.point.clone().addScaledVector(normal,.065)});
+  }
+  private landAnchor(anchor:WebAnchor) {
     this.onLand();
     if (!this.pending) {
       this.pending = anchor;
-      this.onMessage('Silk attached. Find another surface and fire to weave a path.');
+      this.onMessage(anchor.strandId!==undefined?'Silk caught your thread. Fire at another strand or surface to weave a junction.':'Silk attached. Aim at a surface or an existing thread to keep weaving.');
     } else if (this.pending.position.distanceTo(anchor.position) > SILK_SPAN) {
       this.onMessage('The span is too long. Move closer, or R to release the anchor.');
     } else if (!this.clearSpan(this.pending.position, anchor.position)) {
       this.onMessage('Something crosses this path. Choose a clear span between the anchors.');
-    } else if (this.web.add(this.pending.position, anchor.position)) {
+    } else if (this.web.connect(this.pending, anchor)) {
       this.pending = undefined; this.onBuilt();
       this.onMessage('A new path. Approach the thread and press E to climb onto it.');
     } else this.onMessage(this.web.strands.size >= 240 ? 'The garden holds enough silk. Cut an old strand to make room.' : 'Choose a separate anchor, or R to release the loose thread.');
   }
   update(dt: number) {
     const emitter = this.emitter();
+    if(this.pending){
+      const point=this.web.anchorPosition(this.pending);
+      if(point)this.pending.position.copy(point);
+      else{this.pending=undefined;this.onMessage('That thread was cut. Find a new anchor.');}
+    }
     if (this.pending && this.pending.position.distanceTo(emitter) > SILK_SPAN) {
       this.pending = undefined; this.onMessage('The loose thread ran out. Fire again from closer to your destination.');
     }
@@ -97,7 +105,12 @@ export class SilkLauncher {
       const travel = Math.min(21 * dt, SILK_RANGE - shot.distance);
       this.ray.set(shot.position, shot.direction); this.ray.near = .001; this.ray.far = travel;
       const hit = this.ray.intersectObjects(this.surfaces, false)[0];
-      if (hit) {
+      const silk=this.web.raycast(shot.position,shot.direction,Math.min(travel,hit?.distance??travel),.1,Math.max(.001,.32-shot.distance));
+      if(silk){
+        shot.position.copy(silk.point);this.web.disturb(silk.strand.id,.5);
+        this.landAnchor({position:silk.point,strandId:silk.strand.id,t:silk.t});
+        this.shot=undefined;this.fade=.12;
+      }else if (hit) {
         shot.position.copy(hit.point); this.land(hit, shot.direction);
         this.shot = undefined; this.fade = .12;
       } else {

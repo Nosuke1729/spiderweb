@@ -390,3 +390,4 @@ h1 span {
 .garden-notes { margin-top:25px; max-width:450px; padding:0 20px; font-size:11px; line-height:1.9; letter-spacing:.04em; color:#c5cbbd }
 .status { max-width:75%; white-space:normal; text-align:center; line-height:1.65 }
 @media(max-width:900px) { .hint {font-size:8px} .hint span {padding:0 3px} .discovery-count {margin-left:9px} }
+.reticle.on-silk { color: #c7e9e0; filter: drop-shadow(0 0 3px #c7e9e066); }

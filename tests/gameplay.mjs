@@ -147,3 +147,81 @@ test('a camera initialized from a wall save keeps a valid tangent frame',()=>{
   assert.ok(camera.camera.position.toArray().every(Number.isFinite));
   assert.ok(camera.forward(v(1,0,0)).dot(v(0,1,0))>.99);
 });
+
+test('physical shots join two strand interiors into a connected web',()=>{
+  const f=launcherFixture();f.origin.set(0,2,3);
+  f.web.add(v(-4,3,-5),v(4,3,-5));f.web.add(v(4,3,-5),v(4,3,-1));
+  const first=f.web.strands.get(1),second=f.web.strands.get(2);
+  f.launcher.shoot(f.web.sample(first,.5));f.launcher.update(.02);
+  assert.equal(f.launcher.pending,undefined);finish(f.launcher);
+  assert.equal(f.launcher.pending.strandId,1);
+  f.launcher.shoot(f.web.sample(second,.5));finish(f.launcher);
+  assert.equal(f.launcher.pending,undefined);assert.equal(f.web.strands.size,5);
+  assert.equal([...f.web.nodes.values()].filter(n=>n.strands.size===3).length,2);
+  assert.equal(f.web.components().length,1);
+  const bridge=[...f.web.strands.values()].at(-1);f.web.disturb(bridge.id,1);
+  for(const strand of f.web.strands.values())assert.ok(strand.energy>.1);
+});
+test('splitting silk preserves its exact sag curve and riders',()=>{
+  const scene=new THREE.Scene(),web=new WebManager(scene);
+  web.add(v(-5,4,0),v(5,4,0));const original=web.strands.get(1);
+  const points=Array.from({length:21},(_,i)=>web.sample(original,i/20));
+  const camera=new SpiderCamera([],16/9),controller=new SpiderController(new Spider(scene),camera,{pressed:()=>false},[]);
+  controller.ride(...web.getEndpoints(original),.75,original.id,1,original.tension,original.sag);controller.update(1/120,0);
+  const before=controller.position.clone();let replacements;
+  web.onSplit=(id,parts)=>{replacements=parts;controller.remapStrand(id,parts,s=>web.getEndpoints(s));};
+  assert.ok(web.connect({position:web.sample(original,.4),strandId:original.id,t:.4},{position:v(-1,7,3)}));
+  for(let i=0;i<points.length;i++){
+    const t=i/20,part=replacements.find(p=>t<=p.to)??replacements.at(-1);
+    assert.ok(web.sample(part.strand,(t-part.from)/(part.to-part.from)).distanceTo(points[i])<1e-8);
+  }
+  controller.update(1/120,0);assert.ok(controller.isRiding());assert.ok(controller.position.distanceTo(before)<1e-8);
+  const save=web.serialize(),loaded=new WebManager(new THREE.Scene());loaded.restore(save);
+  assert.equal(loaded.components().length,1);
+  for(const s of web.strands.values())assert.ok(web.sample(s,.5).distanceTo(loaded.sample(loaded.strands.get(s.id),.5))<1e-8);
+});
+test('a solid obstruction shields silk and cut pending silk cannot become a floating anchor',()=>{
+  const f=launcherFixture();f.web.add(v(-3,1,-6),v(3,1,-6));
+  f.surfaces.push(box(f.scene,0,1,-2));f.launcher.shoot(f.web.sample(f.web.strands.get(1),.5));finish(f.launcher);
+  assert.equal(f.launcher.pending.strandId,undefined);assert.ok(f.launcher.pending.position.z>-2.1);
+  f.launcher.cancel();f.surfaces.length=0;f.launcher.shoot(f.web.sample(f.web.strands.get(1),.5));finish(f.launcher);
+  assert.equal(f.launcher.pending.strandId,1);f.web.remove(1);f.launcher.update(.01);assert.equal(f.launcher.pending,undefined);
+});
+
+test('an existing crossing node joins the targeted strand without leaving disconnected silk',()=>{
+  const web=new WebManager(new THREE.Scene());web.add(v(-3,3,0),v(3,3,0));
+  const s=web.strands.get(1),point=web.sample(s,.5);web.add(point,v(0,6,3));
+  assert.equal(web.components().length,2);
+  assert.ok(web.connect({position:point,strandId:s.id,t:.5},{position:v(2,6,-3)}));
+  assert.equal(web.components().length,1);assert.equal([...web.nodes.values()].find(n=>n.position.distanceTo(point)<.001).strands.size,4);
+});
+test('capacity rejection does not split or damage the existing web',()=>{
+  const web=new WebManager(new THREE.Scene());for(let i=0;i<240;i++)web.add(v(0,2,i*.4),v(4,2,i*.4));
+  const before=JSON.stringify(web.serialize()),s=web.strands.get(1);
+  assert.equal(web.connect({position:web.sample(s,.5),strandId:s.id,t:.5},{position:v(2,5,-2)}),false);
+  assert.equal(JSON.stringify(web.serialize()),before);
+});
+test('expanded terrain supports exploration and saves beyond the old garden limits',async()=>{
+  const {TERRAIN_SIZE,gardenHeight,OUTER_HABITATS}=await import(path.join(output,'src/world/WorldLayout.js'));
+  const geometry=new THREE.PlaneGeometry(TERRAIN_SIZE,TERRAIN_SIZE,TERRAIN_SIZE,TERRAIN_SIZE);geometry.rotateX(-Math.PI/2);
+  const p=geometry.attributes.position;for(let i=0;i<p.count;i++)p.setY(i,gardenHeight(p.getX(i),p.getZ(i)));geometry.computeVertexNormals();
+  const mesh=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial());mesh.updateMatrixWorld(true);installTerrainRaycast(mesh,TERRAIN_SIZE,TERRAIN_SIZE);
+  const camera=new SpiderCamera([mesh],16/9),keys=new Set(),controller=new SpiderController(new Spider(new THREE.Scene()),camera,{pressed:(...codes)=>codes.some(c=>keys.has(c))},[mesh]);
+  controller.restore([70,gardenHeight(70,60)+.245,60],[0,1,0],[1,0,0]);assert.equal(controller.position.x,70);
+  camera.heading.set(1,0,0);keys.add('KeyW');
+  for(let i=0;i<240;i++){controller.update(1/120,i/120);camera.update(controller.position,controller.normal,1/120);}
+  assert.ok(controller.position.x>73);assert.equal(controller.airborne,false);
+  const exploration=new Exploration();for(const habitat of OUTER_HABITATS)exploration.update(v(habitat.x,gardenHeight(habitat.x,habitat.z)+.25,habitat.z));
+  assert.equal(exploration.discovered.size,5);assert.equal(exploration.total,11);
+});
+
+test('caught insects remain on split strands and outer insects stay in their habitat',async()=>{
+  const {InsectManager}=await import(path.join(output,'src/creatures/InsectManager.js'));
+  const scene=new THREE.Scene(),web=new WebManager(scene),manager=new InsectManager(scene,web);
+  web.add(v(-4,3,0),v(4,3,0));const s=web.strands.get(1),fly=manager.insects[0];
+  fly.caught={strand:s.id,time:2,point:web.sample(s,.7)};web.onSplit=(id,parts)=>manager.remapStrand(id,parts);
+  assert.ok(web.connect({position:web.sample(s,.4),strandId:s.id,t:.4},{position:v(0,6,3)}));
+  assert.notEqual(fly.caught.strand,s.id);assert.ok(web.strands.has(fly.caught.strand));manager.update(0,.01);assert.ok(fly.caught);
+  const outer=manager.insects[18],home=outer.home.clone();outer.caught={strand:fly.caught.strand,time:0,point:outer.position.clone()};
+  assert.ok(manager.collectNear(outer.position));assert.ok(outer.position.distanceTo(home)<17);
+});
