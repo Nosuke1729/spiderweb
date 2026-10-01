@@ -14,6 +14,7 @@
 - `src/player/SpiderController.ts`: surface probes, corner traversal, leaping, silk travel, and pose smoothing.
 - `src/camera/SpiderCamera.ts`: transported orbit frame, pitch, distance, look sensitivity, anticipation, and collision sweeps.
 - `src/web/SilkLauncher.ts`: projectile travel, first contact, range, trailing silk, pending anchor, and span obstruction checks.
+- `src/web/WebInteraction.ts`: reachable cutting selection, nearby tolerance, underfoot priority, and occlusion.
 - `src/web/WebPath.ts`: shared strand sag and tangent functions used by rendering, picking, insects, and traversal.
 - `src/web/WebManager.ts`: graph, connected components, silk rendering, vibration propagation, and serialization.
 - `src/creatures/InsectManager.ts`: wandering, web contact, temporary entanglement, and close interaction.
@@ -23,7 +24,7 @@
 
 Mouse motion orbits while pointer lock is available. If the browser rejects pointer lock, dragging either mouse button orbits; a left click fires only if the press did not become a drag. The fallback reticle follows the actual cursor. Mouse wheel changes orbit distance, Q recenters, and the pause menu exposes sensitivity. Losing a previously active pointer lock pauses safely.
 
-The orbit frame follows surface orientation through quaternion interpolation, including ceilings. Pitch permits looking up and down. A five-ray camera sweep accounts for lens clearance and is repeated after follow smoothing to prevent interpolation through obstacles. Camera controls do not alter the spider's heading until movement is requested.
+The orbit frame follows surface orientation through quaternion interpolation, including ceilings. Pitch permits looking up and down. A five-ray camera sweep accounts for lens clearance and is repeated after follow smoothing to prevent interpolation through obstacles. If bark or a mushroom cap compresses the requested orbit below .85 units, the camera tries the clear side of the supporting face before collapsing into the spider. Camera controls do not alter the spider's heading until movement is requested.
 
 ## Movement
 
@@ -33,11 +34,13 @@ Tree roots, higher branches, the lantern rock, and the fence form a traversal lo
 
 ## Silk and encounters
 
-Silk launches from the spider at 21 world units/second with a maximum shot range of 12 units. A swept ray over each simulation interval checks the first actual contact; camera aiming does not bypass obstacles between the spider and the target. A missed shot creates no nodes. Two landed shots form a maximum 18-unit span only if the sagged path is clear. The pending anchor keeps a visible loose thread to the spider and is released if the player exceeds its length. R cancels a shot or loose anchor before cutting a completed strand.
+Silk launches from the spider at 21 world units/second with a maximum shot range of 12 units. A swept ray over each simulation interval checks the first actual contact; camera aiming does not bypass obstacles between the spider and the target. A missed shot creates no nodes. Two landed shots form a maximum 18-unit span only if the sagged path is clear. The pending anchor keeps a visible loose thread to the spider and is released if the player exceeds its length. R first cuts reachable completed silk within 1.25 units, preferring the ridden strand and then a nearby aimed strand. Without a nearby strand it cancels the shot/loose anchor, or cuts aimed silk. Selection uses the same query for the warm glint and the action, and rays prevent cutting through solid obstacles. Removing a segment cleans orphan nodes and immediately saves the graph.
 
 Silk also collides with other strands. Camera picking provides a modest tolerance and a glint, while the projectile still checks first contact from the spider. An interior attachment becomes a shared graph node when the second anchor lands. Splitting restricts the original sag parabola to each child interval, preserving shape exactly. Riders and caught insects remap to child strands; vibration and outgoing-path selection use the new topology. Capacity, duplicate, and invalid-reference rejection happen before graph mutation. Threads that merely overlap do not automatically knot.
 
 Rendering, nearest-point queries, cutting, insect targets, and player traversal share the same curve. At a junction, camera direction and A/D bias choose the outgoing strand. The spider returns to the surface supporting an endpoint or falls if it has no support. Cutting the strand being ridden detaches the spider. Insects remain caught up to 18 seconds and are released by a cut. Web sense audio and text occur when the spider is near the disturbed network.
+
+F toggles a pull toward the first fired anchor. The controller accelerates to at most 6 units/second, brakes near the anchor, and sweeps five body probes against solids. Surface arrival transports orientation and resumes adhesion; silk arrival attaches to that curve. Intervening obstacles stop the pull, and missing anchors release it. F releases with bounded momentum; Space leaps; firing a second shot releases the pull and continues normal construction. The first anchor remains on arrival. Pull state and loose anchors are temporary and do not change the save format. Losing window focus pauses movement.
 
 Exploration records eleven actual visited habitats rather than floating items. Progress and encountered insects are shown in the pause menu; discoveries briefly describe the place. No mandatory route is imposed.
 
@@ -53,9 +56,9 @@ The existing `spiderweb-garden-v2` localStorage key is retained to migrate exist
 
 ## Verification
 
-`npm test` uses the existing TypeScript compiler and Node's test runner; it adds no dependencies. Regression checks cover travel before impact, first obstruction, range misses, connected shots, obstructed spans, curve agreement, junction choice, terrain ray equivalence, cylinder seams, ground/wall/ceiling transitions, camera rotations, discovery conditions, corrupt saves, restored surface orientation, idle stability, physical strand-to-strand shots, preserved split geometry and riders, connected vibration, capacity atomicity, and outer terrain traversal and saves. GitHub Actions runs these before type checking and building.
+`npm test` uses the existing TypeScript compiler and Node's test runner; it adds no dependencies. Regression checks cover travel before impact, first obstruction, range misses, connected shots, obstructed spans, curve agreement, junction choice, terrain ray equivalence, cylinder seams, ground/wall/ceiling transitions, camera rotations, discovery conditions, corrupt saves, restored surface orientation, idle stability, physical strand-to-strand shots, preserved split geometry and riders, connected vibration, capacity atomicity, outer terrain traversal and saves, nearby cut selection and occlusion, deletion persistence, gradual pulling, wall/ceiling arrival, obstruction stopping, missing anchors, leap cancellation, post-pull building, and cutting ridden silk. GitHub Actions runs these before type checking and building.
 
-The development HUD exposes position, normal, graph, encounters, traversal mode, projectile state, and FPS. Local `?qa=wall`, `?qa=ceiling`, `?qa=insect`, `?qa=ride`, `?qa=stress`, and `?qa=fresh`, `?qa=orchard`, `?qa=arch`, `?qa=meadow`, `?qa=pot`, and `?qa=outer` scenarios exercise the main systems. These routes and the debug HUD are removed from production and use no normal save slot.
+The development HUD exposes position, normal, graph, encounters, traversal mode, projectile state, and FPS. Local `?qa=wall`, `?qa=ceiling`, `?qa=insect`, `?qa=ride`, `?qa=stress`, and `?qa=fresh`, `?qa=orchard`, `?qa=arch`, `?qa=meadow`, `?qa=pot`, and `?qa=outer`, `?qa=cut`, and `?qa=pull` scenarios exercise the main systems. These routes and the debug HUD are removed from production and use no normal save slot.
 
 ## Known limitations and next improvements
 
@@ -64,5 +67,5 @@ The development HUD exposes position, normal, graph, encounters, traversal mode,
 - Flexible grass and detached canopy leaves are visual foliage rather than permanent silk supports.
 - Insects have lightweight steering and encounters, without combat or a full food economy.
 - The puddle uses stylized ripple and color reflection, without real time planar reflection.
-- Touch controls and silk suspension are future additions. Desktop keyboard and mouse remain the target.
+- Touch controls and free pendulum swinging are future additions; anchored silk pulling is implemented. Desktop keyboard and mouse remain the target.
 - Leg contact animation, further material detail, spatial audio, and richer insect behavior are worthwhile next passes.

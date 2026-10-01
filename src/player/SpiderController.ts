@@ -8,6 +8,8 @@ import type { StrandReplacement } from '../web/WebManager';
 import { MAX_SAVE_POSITION } from '../world/WorldLayout';
 
 const clearance = .245;
+export type PullTarget={position:THREE.Vector3;normal?:THREE.Vector3};
+export type PullEnd='arrived'|'blocked'|'lost'|'released';
 export class SpiderController {
   readonly position = new THREE.Vector3(-3, .25, -2.5);
   readonly normal = new THREE.Vector3(0, 1, 0);
@@ -19,6 +21,9 @@ export class SpiderController {
   private ray = new THREE.Raycaster();
   private orientation = new THREE.Quaternion();
   private lastDrive = new THREE.Vector3();
+  private pull?:()=>PullTarget|undefined;
+  private pullSpeed=0;
+  onPullEnd:(reason:PullEnd)=>void=()=>{};
   private webRide?: { a: THREE.Vector3; b: THREE.Vector3; t: number; id: number; direction: number; tension: number; sag:number };
   onRideEnd: (id: number, end: 'a' | 'b', drive: number, wish: THREE.Vector3) => { id: number; a: THREE.Vector3; b: THREE.Vector3; t: number; direction: number; tension: number; sag:number } | undefined = () => undefined;
 
@@ -47,12 +52,14 @@ export class SpiderController {
     this.spider.group.position.copy(this.position);this.spider.group.quaternion.copy(this.orientation);
   }
   jump() {
-    if (this.airborne) return;
+    const pulling=this.isPulling();this.stopPull();
+    if (this.airborne&&!pulling) return;
     this.webRide = undefined;
     this.airborne = true;
     this.leapVelocity.copy(this.normal).multiplyScalar(3.8).addScaledVector(this.heading, Math.max(1.3, this.speed * .8));
   }
   ride(a: THREE.Vector3, b: THREE.Vector3, t: number, id: number, direction = 1, tension = .7,sag=strandSag(a.distanceTo(b),tension)) {
+    this.stopPull();
     this.webRide = { a, b, t, id, direction, tension,sag }; this.airborne = false;
   }
   remapStrand(id:number,parts:StrandReplacement[],endpoints:(s:StrandReplacement['strand'])=>readonly[THREE.Vector3,THREE.Vector3]){
@@ -62,6 +69,15 @@ export class SpiderController {
     this.ride(a,b,(ride.t-part.from)/(part.to-part.from),part.strand.id,ride.direction,part.strand.tension,part.strand.sag);
   }
   isRiding() { return !!this.webRide; }
+  isPulling(){return !!this.pull;}
+  startPull(target:()=>PullTarget|undefined){
+    if(!target())return false;
+    this.webRide=undefined;this.pull=target;this.pullSpeed=0;this.airborne=true;this.leapVelocity.set(0,0,0);return true;
+  }
+  stopPull(reason:PullEnd='released'){
+    if(!this.pull)return;
+    this.pull=undefined;this.pullSpeed=0;this.leapVelocity.copy(this.velocity).clampLength(0,2);this.onPullEnd(reason);
+  }
   rideId() { return this.webRide?.id; }
   detachRemovedStrand(id: number) { if (this.webRide?.id === id) this.jump(); }
   private cast(origin: THREE.Vector3, direction: THREE.Vector3, max: number) {
@@ -89,7 +105,34 @@ export class SpiderController {
     const running = this.input.pressed('ShiftLeft', 'ShiftRight');
     this.speed = THREE.MathUtils.lerp(this.speed, drive.lengthSq() > .01 ? (running ? 3.65 : 2.05) : 0, 1 - Math.exp(-16 * dt));
 
-    if (this.webRide) {
+    if (this.pull) {
+      const target=this.pull();
+      if(!target)this.stopPull('lost');
+      else{
+        const delta=target.position.clone().sub(this.position),distance=delta.length();
+        this.pullSpeed=Math.min(6,this.pullSpeed+18*dt,Math.max(.6,Math.sqrt(distance*24)));
+        const step=Math.min(distance,this.pullSpeed*dt),direction=delta.normalize();
+        // Sweep the body, not only the tether: the spider must not pass through bark or stone.
+        let contact:ReturnType<SpiderController['cast']>;
+        const offsets=[new THREE.Vector3(),right.clone().multiplyScalar(.13),right.clone().multiplyScalar(-.13),this.normal.clone().multiplyScalar(.1),this.normal.clone().multiplyScalar(-.1)];
+        for(const offset of offsets){
+          const hit=distance>.001?this.cast(this.position.clone().add(offset),direction,step+clearance):undefined;
+          if(hit&&hit.normal.dot(direction)<-.05&&(!contact||hit.distance<contact.distance))contact={...hit,point:hit.point.clone().sub(offset)};
+        }
+        if(contact){
+          this.position.copy(contact.point).addScaledVector(contact.normal,clearance);this.transport(contact.normal);
+          this.airborne=false;this.stopPull(this.position.distanceTo(target.position)<.65?'arrived':'blocked');this.leapVelocity.set(0,0,0);
+        }else{
+          this.position.addScaledVector(direction,step);
+          const tangent=direction.clone().projectOnPlane(this.normal);
+          if(tangent.lengthSq()>.01)this.heading.lerp(tangent.normalize(),1-Math.exp(-10*dt)).normalize();
+          if(distance-step<.025){
+            if(target.normal){this.transport(target.normal);this.airborne=false;}
+            this.stopPull('arrived');this.leapVelocity.set(0,0,0);
+          }
+        }
+      }
+    } else if (this.webRide) {
       const ride = this.webRide;
       const travel = (this.input.pressed('KeyW', 'ArrowUp') ? 1 : 0) - (this.input.pressed('KeyS', 'ArrowDown') ? 1 : 0);
       const length = ride.a.distanceTo(ride.b);

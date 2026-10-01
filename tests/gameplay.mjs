@@ -225,3 +225,71 @@ test('caught insects remain on split strands and outer insects stay in their hab
   const outer=manager.insects[18],home=outer.home.clone();outer.caught={strand:fly.caught.strand,time:0,point:outer.position.clone()};
   assert.ok(manager.collectNear(outer.position));assert.ok(outer.position.distanceTo(home)<17);
 });
+
+const {WebInteraction}=await import(path.join(output,'src/web/WebInteraction.js'));
+test('nearby silk can be selected without aiming, prioritizes ridden silk and never cuts through wood',()=>{
+  const scene=new THREE.Scene(),web=new WebManager(scene),surfaces=[],interaction=new WebInteraction(web,surfaces);
+  web.add(v(-2,1,0),v(2,1,0));web.add(v(-2,1,.7),v(2,1,.7));
+  const eye=v(0,1.2,1),away=new THREE.Ray(v(0,2,4),v(0,1,0));
+  assert.equal(interaction.cutTarget(eye,undefined,away).strand.id,2);
+  assert.equal(interaction.cutTarget(eye,1,away).strand.id,1);
+  surfaces.push(box(scene,0,1,.85,6,4,.15));assert.equal(interaction.cutTarget(eye,undefined,away),undefined);
+  surfaces.length=0;const selected=interaction.cutTarget(eye,undefined,away);web.remove(selected.strand.id);
+  const restored=new WebManager(new THREE.Scene());restored.restore(web.serialize());assert.equal(restored.strands.size,1);assert.ok(!restored.strands.has(selected.strand.id));
+  for(const node of restored.nodes.values())for(const id of node.strands)assert.ok(restored.strands.has(id));
+});
+function pullFixture(surfaces=[]){
+  const scene=new THREE.Scene(),camera=new SpiderCamera(surfaces,1),controller=new SpiderController(new Spider(scene),camera,{pressed:()=>false},surfaces);
+  controller.position.set(0,1,0);return {scene,camera,controller};
+}
+function runPull(controller,seconds=3){for(let i=0;i<120*seconds;i++)controller.update(1/120,i/120);}
+test('pull accelerates gradually, stops at a wall and remains attached with a valid orientation',()=>{
+  const scene=new THREE.Scene(),wall=box(scene,0,2,-6,8,8,.3),f=pullFixture([wall]);let reason;
+  f.controller.onPullEnd=r=>reason=r;
+  const target={position:v(0,2,-5.605),normal:v(0,0,1)};
+  assert.equal(f.controller.startPull(()=>target),true);f.controller.update(1/120,0);
+  assert.ok(f.controller.position.distanceTo(v(0,1,0))<.005);assert.ok(f.controller.isPulling());
+  runPull(f.controller);assert.equal(reason,'arrived');assert.equal(f.controller.isPulling(),false);assert.equal(f.controller.airborne,false);
+  assert.ok(f.controller.position.z>-5.7);assert.ok(f.controller.normal.z>.99);
+});
+test('pull reaches a ceiling and stays on its underside',()=>{
+  const scene=new THREE.Scene(),ceiling=box(scene,0,5,0,10,.3,10),f=pullFixture([ceiling]);
+  f.controller.startPull(()=>({position:v(0,4.605,0),normal:v(0,-1,0)}));runPull(f.controller);
+  assert.equal(f.controller.airborne,false);assert.ok(f.controller.normal.y<-.99);assert.ok(Math.abs(f.controller.position.y-4.605)<.02);
+});
+test('pull cannot pass through an intervening obstruction',()=>{
+  const scene=new THREE.Scene(),obstacle=box(scene,0,2,-2,8,8,.3),f=pullFixture([obstacle]);let reason;
+  f.controller.onPullEnd=r=>reason=r;f.controller.startPull(()=>({position:v(0,2,-6),normal:v(0,0,1)}));runPull(f.controller);
+  assert.equal(reason,'blocked');assert.ok(f.controller.position.z>-1.7);assert.equal(f.controller.airborne,false);
+});
+test('a missing anchor releases pull, and Space interrupts it with an actual leap',()=>{
+  const f=pullFixture();let target={position:v(0,6,0)},reason;f.controller.onPullEnd=r=>reason=r;
+  f.controller.startPull(()=>target);runPull(f.controller,.2);target=undefined;f.controller.update(1/120,1);assert.equal(reason,'lost');assert.equal(f.controller.isPulling(),false);
+  f.controller.startPull(()=>({position:v(0,6,0)}));const before=f.controller.position.clone();f.controller.jump();f.controller.update(1/120,2);
+  assert.equal(f.controller.isPulling(),false);assert.ok(f.controller.position.y>before.y);assert.equal(f.controller.airborne,true);
+});
+test('pull retains the fired anchor so a second physical shot can still build a strand',()=>{
+  const f=launcherFixture();f.surfaces.push(box(f.scene,0,2,-5,4,4,.3),box(f.scene,4,2,-3,2,4,.3));
+  f.launcher.shoot(v(0,2,-5));finish(f.launcher);const anchor=f.launcher.pending;
+  const player=pullFixture(f.surfaces);player.controller.position.copy(f.origin);
+  player.controller.startPull(()=>({position:anchor.position.clone().addScaledVector(anchor.normal,.18),normal:anchor.normal}));runPull(player.controller);
+  assert.equal(f.launcher.pending,anchor);f.origin.copy(player.controller.position);
+  f.launcher.shoot(v(4,2,-3));finish(f.launcher);assert.equal(f.web.strands.size,1);assert.equal(f.launcher.pending,undefined);
+});
+test('pull can arrive on existing silk, then cutting underfoot detaches the spider and preserves other paths',()=>{
+  const f=launcherFixture();f.web.add(v(-3,4,-4),v(3,4,-4));f.web.add(v(3,4,-4),v(5,5,-2));
+  const strand=f.web.strands.get(1);f.launcher.shoot(f.web.sample(strand,.5));finish(f.launcher);const anchor=f.launcher.pending;
+  const player=pullFixture();player.controller.position.copy(f.origin);
+  player.controller.onPullEnd=reason=>{if(reason==='arrived'){const [a,b]=f.web.getEndpoints(strand);player.controller.ride(a,b,anchor.t,strand.id,1,strand.tension,strand.sag);}};
+  player.controller.startPull(()=>{const position=f.web.anchorPosition(anchor);return position?{position:position.add(v(0,.245,0))}:undefined;});runPull(player.controller);
+  assert.equal(player.controller.isRiding(),true);assert.equal(f.launcher.pending,anchor);
+  player.controller.detachRemovedStrand(strand.id);f.web.remove(strand.id);f.launcher.update(.01);
+  assert.equal(player.controller.isRiding(),false);assert.equal(player.controller.airborne,true);assert.equal(f.launcher.pending,undefined);
+  assert.equal(f.web.strands.size,1);assert.equal(f.web.nodes.size,2);assert.equal(f.web.components().length,1);
+});
+test('an obstructed climbing orbit moves to the open face instead of into the spider',()=>{
+  const scene=new THREE.Scene(),wall=box(scene,0,0,0,12,12,.3),camera=new SpiderCamera([wall],1);
+  camera.heading.set(0,1,0);camera.look(0,-420);const position=v(0,0,.395),normal=v(0,0,1);
+  for(let i=0;i<120;i++)camera.update(position,normal,1/120);
+  assert.ok(camera.camera.position.z>.4);assert.ok(camera.camera.position.distanceTo(position)>1.2);
+});

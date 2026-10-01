@@ -72,13 +72,13 @@ export class SilkLauncher {
   }
   private land(hit: THREE.Intersection, direction: THREE.Vector3) {
     const normal = surfaceNormal(hit, direction);
-    this.landAnchor({position:hit.point.clone().addScaledVector(normal,.065)});
+    this.landAnchor({position:hit.point.clone().addScaledVector(normal,.065),normal});
   }
   private landAnchor(anchor:WebAnchor) {
     this.onLand();
     if (!this.pending) {
       this.pending = anchor;
-      this.onMessage(anchor.strandId!==undefined?'Silk caught your thread. Fire at another strand or surface to weave a junction.':'Silk attached. Aim at a surface or an existing thread to keep weaving.');
+      this.onMessage('Silk attached. F pulls you toward it; click another surface or thread to weave.');
     } else if (this.pending.position.distanceTo(anchor.position) > SILK_SPAN) {
       this.onMessage('The span is too long. Move closer, or R to release the anchor.');
     } else if (!this.clearSpan(this.pending.position, anchor.position)) {

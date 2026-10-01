@@ -66,7 +66,14 @@ export class SpiderCamera {
     const desiredDistance = this.aim ? Math.min(2.6, this.orbitDistance) : this.orbitDistance;
     this.distance = THREE.MathUtils.lerp(this.distance, desiredDistance, 1 - Math.exp(-9 * dt));
     const direction = viewHeading.clone().multiplyScalar(-Math.cos(this.pitch)).addScaledVector(this.normal, Math.sin(this.pitch)).normalize();
-    const clear = this.clearDistance(this.focus, direction, this.distance, viewRight, this.normal);
+    let clear = this.clearDistance(this.focus, direction, this.distance, viewRight, this.normal);
+    // Reeling under a cap or beside bark can squeeze the lens into the spider.
+    // Use the open side of the supporting face while the requested orbit is obstructed.
+    if(clear<.85){
+      const escape=direction.clone().projectOnPlane(surface).multiplyScalar(.65).addScaledVector(surface,.76).normalize();
+      const escapeClear=this.clearDistance(this.focus,escape,this.distance,viewRight,this.normal);
+      if(escapeClear>clear+.35){direction.copy(escape);clear=escapeClear;}
+    }
     const desired = this.focus.clone().addScaledVector(direction, clear);
     if (!this.initialized) this.camera.position.copy(desired);
     else {

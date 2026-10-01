@@ -9,6 +9,7 @@ export class Input {
   onPrimary: () => void = () => {};
   onSecondary: (active: boolean) => void = () => {};
   onCut: () => void = () => {};
+  onPull: () => void = () => {};
   onInteract: () => void = () => {};
   onPause: () => void = () => {};
   onJump: () => void = () => {};
@@ -23,12 +24,13 @@ export class Input {
       if (e.repeat) return;
       if (e.code === 'Space') this.onJump();
       if (e.code === 'KeyR') this.onCut();
+      if (e.code === 'KeyF') this.onPull();
       if (e.code === 'KeyE') this.onInteract();
       if (e.code === 'KeyQ') this.onRecenter();
       if (e.code === 'Escape') this.onPause();
     });
     document.addEventListener('keyup', e => this.keys.delete(e.code));
-    window.addEventListener('blur', () => this.clear());
+    window.addEventListener('blur', () => {this.clear();this.onPause();});
     document.addEventListener('pointerlockchange', () => {
       const wasLocked = this.locked;
       this.locked = document.pointerLockElement === this.canvas;

@@ -3,7 +3,7 @@ import { strandPoint, strandSag, strandTangent } from './WebPath';
 
 export type WebNode={id:number;position:THREE.Vector3;strands:Set<number>};
 export type WebStrand={id:number;a:number;b:number;length:number;tension:number;sag:number;integrity:number;energy:number;phase:number;pulse:number};
-export type WebAnchor={position:THREE.Vector3;strandId?:number;t?:number};
+export type WebAnchor={position:THREE.Vector3;normal?:THREE.Vector3;strandId?:number;t?:number};
 export type StrandReplacement={strand:WebStrand;from:number;to:number};
 export type WebSave={nodes:{id:number;position:number[]}[];strands:{id:number;a:number;b:number;sag?:number}[]};
 
@@ -11,6 +11,7 @@ export class WebManager {
   readonly nodes=new Map<number,WebNode>();
   readonly strands=new Map<number,WebStrand>();
   readonly group=new THREE.Group();
+  selectedId?:number;
   private nextNode=1;
   private nextStrand=1;
   private geometry=new THREE.BufferGeometry();
@@ -106,7 +107,7 @@ export class WebManager {
     this.junctions.count=count;this.junctions.instanceMatrix.needsUpdate=true;this.junctions.computeBoundingSphere();
   }
   getEndpoints(s:WebStrand){return [this.nodes.get(s.a)!.position,this.nodes.get(s.b)!.position] as const;}
-  getNearestPoint(position:THREE.Vector3,max=.65){
+  getNearestPoint(position:THREE.Vector3,max=.65,reachable:(point:THREE.Vector3)=>boolean=()=>true){
     let closest:{strand:WebStrand;point:THREE.Vector3;t:number;distance:number}|undefined;
     const delta=new THREE.Vector3(),point=new THREE.Vector3(),last=new THREE.Vector3(),next=new THREE.Vector3();
     for(const s of this.strands.values()){
@@ -118,7 +119,7 @@ export class WebManager {
         strandPoint(a,b,s.tension,(i+1)/this.segments,next,s.sag);delta.copy(next).sub(last);
         const u=THREE.MathUtils.clamp(point.copy(position).sub(last).dot(delta)/delta.lengthSq(),0,1);
         point.copy(last).addScaledVector(delta,u);const distance=point.distanceTo(position);
-        if(distance<max&&(!closest||distance<closest.distance))closest={strand:s,point:point.clone(),t:(i+u)/this.segments,distance};
+        if(distance<max&&(!closest||distance<closest.distance)&&reachable(point))closest={strand:s,point:point.clone(),t:(i+u)/this.segments,distance};
         last.copy(next);
       }
     }
@@ -198,7 +199,8 @@ export class WebManager {
           this.positions[index]=point.x;this.positions[index+1]=point.y;this.positions[index+2]=point.z;
           const pulse=Math.max(0,1-Math.abs(u-(1-s.pulse))/.16)*s.energy*.85;
           const c=Math.min(1,base+glow+pulse);
-          this.colors[index]=c*.74;this.colors[index+1]=c*.92;this.colors[index+2]=c;
+          const selected=s.id===this.selectedId;
+          this.colors[index]=selected?Math.max(.95,c):c*.74;this.colors[index+1]=selected?Math.max(.76,c*.85):c*.92;this.colors[index+2]=selected?Math.max(.4,c*.55):c;
           index+=3;
         }
       }

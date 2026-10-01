@@ -12,6 +12,7 @@ import { InsectManager } from '../creatures/InsectManager';
 import { AudioManager } from '../audio/AudioManager';
 import { Input } from './Input';
 import { SilkLauncher } from '../web/SilkLauncher';
+import { WebInteraction } from '../web/WebInteraction';
 import { Exploration } from '../world/Exploration';
 import { OUTER_HABITATS } from '../world/WorldLayout';
 
@@ -34,6 +35,7 @@ export class Game {
   private bloom:UnrealBloomPass;
   private ray=new THREE.Raycaster();
   readonly launcher:SilkLauncher;
+  private silkInteraction:WebInteraction;
   readonly exploration=new Exploration();
   private catches=0;
   private accumulator=0;
@@ -72,7 +74,7 @@ export class Game {
           <div class="aim-prompt" id="prompt"></div>
           <div class="reticle" id="reticle"><i></i><i></i><i></i><i></i></div>
           <div class="status" id="status"></div>
-          <div class="hint"><b>W A S D</b> move <span>·</span> <b>MOUSE</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>R</b> cut</div>
+          <div class="hint"><b>W A S D</b> move <span>·</span> <b>MOUSE</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>F</b> pull <span>·</span> <b>R</b> cut</div>
         </div>
         <div class="screen start-screen" id="start">
           <div class="eyebrow"><span class="line"></span> A WORLD BENEATH THE LEAVES <span class="line"></span></div>
@@ -104,6 +106,7 @@ export class Game {
     this.root.querySelector('.viewport')!.appendChild(this.canvas);
     this.world=new World(this.scene);this.scene.updateMatrixWorld(true);
     this.web=new WebManager(this.scene);
+    this.silkInteraction=new WebInteraction(this.web,this.world.colliders);
     this.silkAim.visible=false;this.scene.add(this.silkAim);
     this.spider=new Spider(this.scene);
     this.camera=new SpiderCamera(this.world.colliders,innerWidth/innerHeight);
@@ -123,7 +126,11 @@ export class Game {
     if(import.meta.env.DEV)this.qa=new URLSearchParams(location.search).get('qa')??'';
     this.setupControls();if(!this.qa)this.load();this.resize();
     if(import.meta.env.DEV){
-      if(['arch','orchard','meadow','pot','outer'].includes(this.qa)){
+      if(this.qa==='cut'||this.qa==='pull'){
+        this.started=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');
+        if(this.qa==='cut'){this.web.add(new THREE.Vector3(-4,.55,-2.5),new THREE.Vector3(-2,.55,-2.5));this.updateCount();}
+        else{this.controller.position.set(-6.3,.3,-8);this.launcher.shoot(new THREE.Vector3(-7,3,-8));}
+      }else if(['arch','orchard','meadow','pot','outer'].includes(this.qa)){
         const point=this.qa==='outer'?{x:39,z:29}:OUTER_HABITATS.find(h=>h.id===this.qa)!;
         const x=point.x-5,z=point.z+5;
         this.controller.position.set(x,this.world.height(x,z)+.3,z);
@@ -185,6 +192,7 @@ export class Game {
     this.input.onPrimary=()=>this.attach();
     this.input.onSecondary=on=>this.camera.setAim(on);
     this.input.onCut=()=>this.cut();
+    this.input.onPull=()=>this.pull();
     this.input.onInteract=()=>this.interact();
     this.input.onJump=()=>{if(this.started&&!this.paused)this.controller.jump();};
     this.input.onPause=()=>{if(this.started&&!this.paused)this.pause();};
@@ -195,6 +203,16 @@ export class Game {
       const [a,b]=this.web.getEndpoints(next);
       const t=next.a===nodeId?0:1;
       return {id:next.id,a,b,t,direction:(t===0?1:-1)*drive,tension:next.tension,sag:next.sag};
+    };
+    this.controller.onPullEnd=reason=>{
+      const anchor=this.launcher.pending;
+      if(reason==='arrived'){
+        if(import.meta.env.DEV&&this.qa==='pull')this.qaDone=true;
+        const strand=anchor?.strandId!==undefined?this.web.strands.get(anchor.strandId):undefined;
+        if(strand&&anchor?.t!==undefined){const [a,b]=this.web.getEndpoints(strand);this.controller.ride(a,b,anchor.t,strand.id,1,strand.tension,strand.sag);this.web.disturb(strand.id,.5);}
+        this.message('Within reach. Your anchor remains; click another surface or thread to weave.');this.audio.attach();
+      }else if(reason==='blocked')this.message('The path is blocked. Walk around it, or fire the second anchor to weave.');
+      else if(reason==='lost')this.message('The anchor is gone. Fire silk to find a new hold.');
     };
     this.web.onSplit=(id,parts)=>{this.controller.remapStrand(id,parts,s=>this.web.getEndpoints(s));this.insects.remapStrand(id,parts);};
     this.web.onChange=()=>{this.updateCount();this.save();};
@@ -224,16 +242,34 @@ export class Game {
     const hit=ray.intersectObjects(this.world.anchors.filter(o=>!(o instanceof THREE.InstancedMesh)),false)[0];
     const silk=this.web.raycast(ray.ray.origin,ray.ray.direction,hit?.distance??60);
     const target=silk?.point??hit?.point??ray.ray.at(40,new THREE.Vector3());
-    this.launcher.shoot(target);
+    if(this.launcher.shoot(target))this.controller.stopPull();
+  }
+  private pull(){
+    if(!this.started||this.paused)return;
+    if(this.controller.isPulling()){this.controller.stopPull();this.message('Pull released. Your anchor remains.');return;}
+    const anchor=this.launcher.pending;
+    if(!anchor||this.launcher.flying){this.message('Fire silk and let it attach, then press F to pull toward it.');return;}
+    const target=()=>{
+      if(this.launcher.pending!==anchor)return;
+      const position=this.web.anchorPosition(anchor);if(!position)return;
+      // Surface anchors sit .065 from the face; keep the body .245 away on arrival.
+      position.addScaledVector(anchor.normal??new THREE.Vector3(0,1,0),anchor.normal ? .18 : .245);
+      return {position,normal:anchor.normal};
+    };
+    const destination=target();
+    if(!destination||destination.position.distanceTo(this.controller.position)<.3){this.message('This anchor is already within reach. Click elsewhere to weave.');return;}
+    if(this.controller.startPull(target)){this.audio.vibration();this.message('Pulling along silk · F to release · Space to leap · click to weave.');}
   }
   private cut(){
     if(!this.started||this.paused)return;
-    if(this.launcher.cancel()){this.message('Loose silk released.');return;}
-    this.aimRay();
-    const occluder=this.ray.intersectObjects(this.world.colliders,false)[0];
-    const strand=this.web.aimStrand(this.ray.ray.origin,this.ray.ray.direction,Math.min(16,(occluder?.distance??16)+.08));
-    if(strand){this.controller.detachRemovedStrand(strand.id);this.web.remove(strand.id);this.audio.cut();this.message('Strand cut.');}
-    else this.message('Aim at a strand to cut it.');
+    const target=this.silkInteraction.cutTarget(this.controller.position,this.controller.rideId(),this.aimRay().ray);
+    if(target&&(target.near||(!this.launcher.pending&&!this.launcher.flying))){
+      const strand=target.strand;
+      if(this.launcher.pending?.strandId===strand.id){this.controller.stopPull();this.launcher.cancel();}
+      this.controller.detachRemovedStrand(strand.id);this.web.remove(strand.id);this.web.selectedId=undefined;this.audio.cut();this.message('Strand cut.');
+      if(import.meta.env.DEV&&this.qa==='cut')this.qaDone=true;
+    }else if(this.launcher.cancel()){this.controller.stopPull();this.message('Loose silk released.');}
+    else this.message('Approach a thread and press R to cut it.');
   }
   private interact(){
     if(!this.started||this.paused)return;
@@ -270,8 +306,14 @@ export class Game {
     this.reticle.style.left=this.input.locked?'50%':`${(this.input.pointer.x+1)*50}%`;
     this.reticle.style.top=this.input.locked?'50%':`${(1-this.input.pointer.y)*50}%`;
     const near=this.web.getNearestPoint(this.controller.position,.65);
+    const cut=this.silkInteraction.cutTarget(this.controller.position,this.controller.rideId(),ray.ray);
+    this.web.selectedId=cut&&(cut.near||(!this.launcher.pending&&!this.launcher.flying))?cut.strand.id:undefined;
     this.prompt.textContent=this.launcher.flying?'SILK IN FLIGHT':silk&&ready?'CLICK · JOIN THIS THREAD':this.controller.isRiding()?'W/S · FOLLOW SILK · SPACE TO LEAP':near&&!this.launcher.pending?'E · TRAVERSE SILK':this.launcher.pending?'CLICK · FIRE SECOND ANCHOR':ready?'CLICK · FIRE SILK':target?'MOVE CLOSER · FIND A CLEAR SHOT':'';
-    this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>R</b> cut`;
+    if(this.controller.isPulling())this.prompt.textContent='PULLING · F RELEASE · SPACE LEAP';
+    else if(this.launcher.pending&&!this.launcher.flying)this.prompt.textContent='F · PULL TO ANCHOR · CLICK TO WEAVE';
+    if(cut?.near)this.prompt.textContent+=' · R CUT NEARBY THREAD';
+    else if(this.launcher.pending)this.prompt.textContent+=' · R RELEASE';
+    this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>F</b> pull <span>·</span> <b>R</b> cut`;
   }
   private save(){
     if(this.qa)return;
@@ -326,7 +368,7 @@ export class Game {
     this.web.update(this.time,dt,this.world.sunDirection,this.camera.camera.position);
     if(this.debug&&Math.floor(this.time*4)!==Math.floor((this.time-dt)*4)){
       const p=this.controller.position,n=this.controller.normal;
-      this.debug.textContent=`DEV  ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}  N ${n.x.toFixed(1)} ${n.y.toFixed(1)} ${n.z.toFixed(1)}  ${this.web.strands.size}S/${this.web.components().length}C  ${this.insects.insects.filter(i=>i.caught).length} caught  ${this.controller.isRiding()?'RIDING':'SURFACE'}  ${this.input.locked?'LOCK':'DRAG'} ${this.launcher.flying?'FLIGHT':this.launcher.pending?'ANCHOR':'READY'}  ${Math.round(1/Math.max(dt,.001))} FPS ${this.qa?this.qa.toUpperCase()+(this.qaDone?' DONE':' RUNNING'):''}`;
+      this.debug.textContent=`DEV  ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}  N ${n.x.toFixed(1)} ${n.y.toFixed(1)} ${n.z.toFixed(1)}  ${this.web.strands.size}S/${this.web.components().length}C  ${this.insects.insects.filter(i=>i.caught).length} caught  ${this.controller.isPulling()?'PULLING':this.controller.isRiding()?'RIDING':'SURFACE'}  ${this.input.locked?'LOCK':'DRAG'} ${this.launcher.flying?'FLIGHT':this.launcher.pending?'ANCHOR':'READY'}  ${Math.round(1/Math.max(dt,.001))} FPS ${this.qa?this.qa.toUpperCase()+(this.qaDone?' DONE':' RUNNING'):''}`;
     }
     if(this.quality==='high')this.composer.render();else this.renderer.render(this.scene,this.camera.camera);
     requestAnimationFrame(this.frame);
