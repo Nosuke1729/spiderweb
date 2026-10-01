@@ -9,6 +9,8 @@ import { SpiderCamera } from '../camera/SpiderCamera';
 import { SpiderController } from '../player/SpiderController';
 import { WebManager } from '../web/WebManager';
 import { InsectManager } from '../creatures/InsectManager';
+import { SPECIES,type SpeciesId } from '../creatures/Species';
+import { prepareWildlifeQA } from './WildlifeQA';
 import { AudioManager } from '../audio/AudioManager';
 import { Input } from './Input';
 import { SilkLauncher } from '../web/SilkLauncher';
@@ -16,7 +18,7 @@ import { WebInteraction } from '../web/WebInteraction';
 import { Exploration } from '../world/Exploration';
 import { OUTER_HABITATS } from '../world/WorldLayout';
 
-type Save={version:2|3|4;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;sensitivity?:number;discovered?:string[];catches?:number};
+type Save={version:2|3|4|5;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;sensitivity?:number;discovered?:string[];catches?:number;wildlife?:Partial<Record<SpeciesId,number>>};
 const saveKey='spiderweb-garden-v2';
 
 export class Game {
@@ -38,6 +40,8 @@ export class Game {
   private silkInteraction:WebInteraction;
   readonly exploration=new Exploration();
   private catches=0;
+  private wildlife:Partial<Record<SpeciesId,number>>={};
+  private lastEncounterHint=-10;
   private accumulator=0;
   private physicsTime=0;
   private promptClock=0;
@@ -112,7 +116,7 @@ export class Game {
     this.camera=new SpiderCamera(this.world.colliders,innerWidth/innerHeight);
     this.input=new Input(this.canvas);
     this.controller=new SpiderController(this.spider,this.camera,this.input,this.world.colliders);
-    this.insects=new InsectManager(this.scene,this.web);
+    this.insects=new InsectManager(this.scene,this.web,this.world.colliders);
     this.composer=new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene,this.camera.camera));
     this.bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.22,.5,.84);
@@ -126,11 +130,14 @@ export class Game {
     if(import.meta.env.DEV)this.qa=new URLSearchParams(location.search).get('qa')??'';
     this.setupControls();if(!this.qa)this.load();this.resize();
     if(import.meta.env.DEV){
-      if(this.qa==='cut'||this.qa==='pull'){
+      if(this.qa==='weaknet'||this.qa==='strongnet'){
+        prepareWildlifeQA(this.qa,this.web,this.insects,this.controller,this.camera);
+        this.started=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');this.updateCount();
+      }else if(this.qa==='cut'||this.qa==='pull'){
         this.started=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');
         if(this.qa==='cut'){this.web.add(new THREE.Vector3(-4,.55,-2.5),new THREE.Vector3(-2,.55,-2.5));this.updateCount();}
         else{this.controller.position.set(-6.3,.3,-8);this.launcher.shoot(new THREE.Vector3(-7,3,-8));}
-      }else if(['arch','orchard','meadow','pot','outer'].includes(this.qa)){
+      }else if(['arch','orchard','meadow','pot','outer','marsh','hollow','hedge','fern'].includes(this.qa)){
         const point=this.qa==='outer'?{x:39,z:29}:OUTER_HABITATS.find(h=>h.id===this.qa)!;
         const x=point.x-5,z=point.z+5;
         this.controller.position.set(x,this.world.height(x,z)+.3,z);
@@ -216,10 +223,19 @@ export class Game {
     };
     this.web.onSplit=(id,parts)=>{this.controller.remapStrand(id,parts,s=>this.web.getEndpoints(s));this.insects.remapStrand(id,parts);};
     this.web.onChange=()=>{this.updateCount();this.save();};
-    this.insects.onCatch=()=>{
+    this.insects.onCatch=creature=>{
       const near=this.web.getNearestPoint(this.controller.position,1.6);
-      if(near&&near.strand.energy>.1){this.audio.vibration();this.message('A faint tremor travels through the silk beneath you.');}
+      if((near&&near.strand.energy>.1)||creature.position.distanceTo(this.controller.position)<12){this.audio.vibration();this.message(`${creature.species.name} held in your web. Approach it and E to release.`);}
       if(this.qa==='insect')this.qaDone=true;
+      if(this.qa==='strongnet'&&creature.species.id==='mouse')this.qaDone=true;
+    };
+    this.insects.onEscape=(creature,net)=>{
+      if(this.qa==='weaknet'&&creature.species.id==='mouse')this.qaDone=true;
+      if(creature.position.distanceTo(this.controller.position)<10&&this.time-this.lastEncounterHint>8){
+        const species=creature.species;
+        const advice=net.threads>=species.threads&&net.loops>=species.loops?`Tighten the cross-threads across its path; ${species.contacts} threads must touch its body.`:`Weave ${species.threads}+ connected threads with ${species.loops} closed loops here; this patch has ${net.threads} threads / ${net.loops} loops.`;
+        this.message(`${species.name} slipped through. ${advice}`);this.lastEncounterHint=this.time;this.audio.vibration();
+      }
     };
     this.exploration.onDiscover=(name,detail)=>{this.message(name+' · '+detail);this.updateDiscoveries();this.audio.note(840,.45,.045);this.save();};
     addEventListener('beforeunload',()=>this.save());
@@ -273,7 +289,10 @@ export class Game {
   }
   private interact(){
     if(!this.started||this.paused)return;
-    if(this.insects.collectNear(this.controller.position)){this.catches++;this.audio.note(580,.15,.1);this.message('The tremor quiets. Your web is part of the living garden.');this.updateDiscoveries();this.save();return;}
+    if(this.insects.collectNear(this.controller.position)){
+      this.catches++;const species=this.insects.lastReleased!;this.wildlife[species.id]=(this.wildlife[species.id]??0)+1;
+      this.audio.note(580,.15,.1);this.message(`${species.name} released. The garden carries on around your paths.`);this.updateDiscoveries();this.save();return;
+    }
     const nearest=this.web.getNearestPoint(this.controller.position,.65);
     if(nearest&&!this.controller.isRiding()){
       const [a,b]=this.web.getEndpoints(nearest.strand);
@@ -290,7 +309,8 @@ export class Game {
   }
   private updateDiscoveries(){
     this.el('discoveries').textContent=`${this.exploration.discovered.size} / ${this.exploration.total} places`;
-    this.el('garden-notes').textContent=`${this.exploration.discovered.size} quiet places discovered · ${this.catches} web encounters. ${this.exploration.nextHint()}`;
+    const wildlife=Object.keys(this.wildlife).length;
+    this.el('garden-notes').textContent=`${this.exploration.discovered.size} quiet places discovered · ${this.catches} web encounters · ${wildlife} / ${Object.keys(SPECIES).length} wildlife encounters. ${this.exploration.nextHint()} Large visitors need a close, connected net with crossed threads and closed loops.`;
   }
   private updatePrompt(){
     if(!this.started||this.paused)return;
@@ -313,21 +333,29 @@ export class Game {
     else if(this.launcher.pending&&!this.launcher.flying)this.prompt.textContent='F · PULL TO ANCHOR · CLICK TO WEAVE';
     if(cut?.near)this.prompt.textContent+=' · R CUT NEARBY THREAD';
     else if(this.launcher.pending)this.prompt.textContent+=' · R RELEASE';
+    const caught=this.insects.nearbyCaught(this.controller.position);
+    const creature=this.insects.inspect(ray.ray.origin,ray.ray.direction,hit?.distance??60);
+    if(!this.launcher.pending&&!this.launcher.flying){
+      if(caught)this.prompt.textContent=`E · RELEASE ${caught.species.name.toUpperCase()}`;
+      else if(creature)this.prompt.textContent=creature.caught?`${creature.species.name.toUpperCase()} · HELD IN SILK`:`${creature.species.name.toUpperCase()} · ${creature.species.threads}+ THREADS${creature.species.loops?` · ${creature.species.loops} CLOSED LOOPS`:''}`;
+    }
     this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>F</b> pull <span>·</span> <b>R</b> cut`;
   }
   private save(){
     if(this.qa)return;
-    try{const data:Save={version:4,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
+    try{const data:Save={version:5,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches,wildlife:this.wildlife};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
   }
   private load(){
     try{
       const value=localStorage.getItem(saveKey);if(!value)return;const data=JSON.parse(value) as Save;
-      if(data.version!==2&&data.version!==3&&data.version!==4)return;
+      if(data.version!==2&&data.version!==3&&data.version!==4&&data.version!==5)return;
       this.controller.restore(data.player,data.normal,data.heading);
       this.camera.heading.copy(this.controller.heading);
       this.camera.sensitivity=typeof data.sensitivity==='number'&&Number.isFinite(data.sensitivity)?THREE.MathUtils.clamp(data.sensitivity,.4,1.8):1;
       (this.el('sensitivity') as HTMLInputElement).value=String(this.camera.sensitivity);
       this.exploration.restore(data.discovered);this.catches=Number.isSafeInteger(data.catches)&&data.catches!>=0?data.catches!:0;this.updateDiscoveries();this.web.restore(data.web);
+      if(data.wildlife&&typeof data.wildlife==='object')for(const id of Object.keys(SPECIES) as SpeciesId[]){const count=data.wildlife[id];if(Number.isSafeInteger(count)&&count!>0&&count!<1e6)this.wildlife[id]=count;}
+      this.updateDiscoveries();
       this.quality=data.quality==='low'?'low':'high';this.audio.setEnabled(!data.muted);
       this.applyQuality();this.el('sound').textContent=`SOUND: ${this.audio.enabled?'ON':'OFF'}`;this.updateCount();
     }catch{try{localStorage.removeItem(saveKey);}catch{}}
@@ -350,7 +378,7 @@ export class Game {
       this.accumulator+=dt;
       while(this.accumulator>=1/120){this.physicsTime+=1/120;this.controller.update(1/120,this.physicsTime);this.accumulator-=1/120;}
       this.camera.update(this.controller.position,this.controller.normal,dt,this.controller.velocity.clone().clampLength(0,3.5));
-      this.insects.update(this.time,dt);
+      this.insects.update(this.time,dt,this.controller.position);
       if(!this.controller.airborne&&this.controller.speed>.45){
         this.stepDistance+=this.controller.speed*dt;
         if(this.stepDistance>.52){this.audio.step();this.stepDistance=0;}
@@ -363,7 +391,7 @@ export class Game {
     }else{
       this.spider.animate(this.time,0,false);
       this.camera.update(this.controller.position,this.controller.normal,dt);
-      this.insects.update(this.time,dt);
+      this.insects.update(this.time,dt,this.controller.position);
     }
     this.web.update(this.time,dt,this.world.sunDirection,this.camera.camera.position);
     if(this.debug&&Math.floor(this.time*4)!==Math.floor((this.time-dt)*4)){

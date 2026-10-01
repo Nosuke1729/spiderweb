@@ -212,7 +212,7 @@ test('expanded terrain supports exploration and saves beyond the old garden limi
   for(let i=0;i<240;i++){controller.update(1/120,i/120);camera.update(controller.position,controller.normal,1/120);}
   assert.ok(controller.position.x>73);assert.equal(controller.airborne,false);
   const exploration=new Exploration();for(const habitat of OUTER_HABITATS)exploration.update(v(habitat.x,gardenHeight(habitat.x,habitat.z)+.25,habitat.z));
-  assert.equal(exploration.discovered.size,5);assert.equal(exploration.total,11);
+  assert.equal(exploration.discovered.size,9);assert.equal(exploration.total,15);
 });
 
 test('caught insects remain on split strands and outer insects stay in their habitat',async()=>{
@@ -292,4 +292,88 @@ test('an obstructed climbing orbit moves to the open face instead of into the sp
   camera.heading.set(0,1,0);camera.look(0,-420);const position=v(0,0,.395),normal=v(0,0,1);
   for(let i=0;i<120;i++)camera.update(position,normal,1/120);
   assert.ok(camera.camera.position.z>.4);assert.ok(camera.camera.position.distanceTo(position)>1.2);
+});
+
+const {SPECIES}=await import(path.join(output,'src/creatures/Species.js'));
+const {assessNet}=await import(path.join(output,'src/web/NetAssessment.js'));
+function netGrid(web,center=v(0,2,0),columns=3,rows=3,spacing=.65){
+  const at=(x,z)=>center.clone().add(v((x-(columns-1)/2)*spacing,0,(z-(rows-1)/2)*spacing));
+  for(let x=0;x<columns;x++)for(let z=0;z<rows;z++){
+    if(x+1<columns)web.add(at(x,z),at(x+1,z));
+    if(z+1<rows)web.add(at(x,z),at(x,z+1));
+  }
+}
+test('one thread catches a fly but every larger species requires an actual net',()=>{
+  const web=new WebManager(new THREE.Scene());web.add(v(-2,2,0),v(2,2,0));const point=web.sample(web.strands.get(1),.5);
+  assert.equal(assessNet(web,point,SPECIES.fly).caught,true);
+  for(const species of Object.values(SPECIES).filter(s=>s.id!=='fly'))assert.equal(assessNet(web,point,species).caught,false,species.id);
+});
+test('unjoined crossing strands and a long subdivided thread cannot pretend to be a strong net',()=>{
+  const web=new WebManager(new THREE.Scene());
+  for(let i=0;i<15;i++)web.add(v(-2,2+i*.025,-.3+i*.035),v(2,2+i*.025,.3-i*.035));
+  const result=assessNet(web,v(0,2.2,0),SPECIES.mouse);assert.ok(result.threads<12);assert.equal(result.caught,false);
+  const chain=new WebManager(new THREE.Scene());for(let i=0;i<15;i++)chain.add(v(-2.325+i*.31,2,0),v(-2.015+i*.31,2,0));
+  const linked=assessNet(chain,v(0,2,0),SPECIES.mouse);assert.ok(linked.threads>=12);assert.equal(linked.loops,0);assert.equal(linked.caught,false);
+});
+test('dense connected local nets catch larger wildlife, while smaller nets do not hold a mouse',()=>{
+  const medium=new WebManager(new THREE.Scene());netGrid(medium,v(0,2,0),3,2);
+  assert.equal(assessNet(medium,v(0,2,.1),SPECIES.beetle).caught,true);
+  assert.equal(assessNet(medium,v(0,2,0),SPECIES.frog).caught,false);
+  assert.equal(assessNet(medium,v(0,2,0),SPECIES.mouse).caught,false);
+  const dense=new WebManager(new THREE.Scene());netGrid(dense);
+  for(const species of [SPECIES.snail,SPECIES.frog,SPECIES.mouse]){
+    const result=assessNet(dense,v(0,2,0),species);assert.equal(result.caught,true,species.id);assert.ok(result.loops>=species.loops);assert.ok(result.contacts>=species.contacts);
+  }
+});
+test('remote silk does not strengthen a nearby weak strand',()=>{
+  const web=new WebManager(new THREE.Scene());web.add(v(-2,2,0),v(2,2,0));
+  web.add(v(2,2,0),v(2,2,10));netGrid(web,v(2,2,10),5,5);
+  const result=assessNet(web,v(0,2,0),SPECIES.mouse);assert.equal(result.caught,false);assert.ok(result.threads<12);
+});
+test('animals are physically caught by a net and released when its support is cut',async()=>{
+  const {InsectManager}=await import(path.join(output,'src/creatures/InsectManager.js'));
+  const {gardenHeight}=await import(path.join(output,'src/world/WorldLayout.js'));
+  const scene=new THREE.Scene(),web=new WebManager(scene),manager=new InsectManager(scene,web),mouse=manager.insects.find(c=>c.species.id==='mouse');
+  const center=v(0,gardenHeight(0,0)+SPECIES.mouse.lift,0);netGrid(web,center);
+  mouse.position.copy(center);mouse.group.position.copy(center);mouse.target.copy(center).add(v(0,0,2));mouse.velocity.set(0,0,0);mouse.rest=0;mouse.cooldown=0;mouse.contactClock=0;
+  manager.update(0,1/60);assert.ok(mouse.caught);assert.equal(mouse.bindings.visible,true);
+  const id=[...web.strands.keys()].find(s=>s!==mouse.caught.strand);web.remove(id);
+  for(let i=0;i<20;i++)manager.update(i/60,1/60);assert.equal(mouse.caught,undefined);assert.ok(mouse.cooldown>0);
+});
+test('a large creature slips past a weak thread, making it vibrate without being immobilized',async()=>{
+  const {InsectManager}=await import(path.join(output,'src/creatures/InsectManager.js'));
+  const scene=new THREE.Scene(),web=new WebManager(scene),manager=new InsectManager(scene,web),mouse=manager.insects.find(c=>c.species.id==='mouse');
+  web.add(v(-2,.7,0),v(2,.7,0));mouse.position.set(0,.68,0);mouse.target.set(0,.68,4);mouse.velocity.set(0,0,1);mouse.rest=0;mouse.cooldown=0;mouse.contactClock=0;
+  let escaped=false;manager.onEscape=c=>{if(c===mouse)escaped=true;};manager.update(0,1/60);
+  assert.equal(mouse.caught,undefined);assert.equal(escaped,true);assert.ok(web.strands.get(1).energy>.5);
+  const before=mouse.position.clone();for(let i=0;i<20;i++)manager.update(i/60,1/60);assert.ok(mouse.position.distanceTo(before)>.1);
+});
+test('the enlarged field retains old terrain and supports new player and silk save positions',async()=>{
+  const {TERRAIN_SIZE,FIELD_EXTENT,gardenHeight}=await import(path.join(output,'src/world/WorldLayout.js'));
+  assert.equal(TERRAIN_SIZE,320);assert.equal(FIELD_EXTENT,145);
+  const controller=pullFixture().controller;controller.restore([137,gardenHeight(137,-121)+.245,-121],[0,1,0],[1,0,0]);assert.equal(controller.position.x,137);
+  const web=new WebManager(new THREE.Scene());web.add(v(131,2,-123),v(135,3,-120));const restored=new WebManager(new THREE.Scene());restored.restore(web.serialize());assert.equal(restored.strands.size,1);
+  const data=restored.serialize();data.nodes[0].position=[161,2,0];const rejected=new WebManager(new THREE.Scene());rejected.restore(data);assert.equal(rejected.nodes.size,0);
+});
+test('leaping in the low wetland does not trigger the old below-zero respawn',async()=>{
+  const {gardenHeight}=await import(path.join(output,'src/world/WorldLayout.js'));
+  const x=81,z=78,geometry=new THREE.PlaneGeometry(24,24,24,24);geometry.rotateX(-Math.PI/2);
+  const p=geometry.attributes.position;for(let i=0;i<p.count;i++){const px=p.getX(i)+x,pz=p.getZ(i)+z;p.setXYZ(i,px,gardenHeight(px,pz),pz);}geometry.computeVertexNormals();
+  const floor=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial());floor.updateMatrixWorld(true);
+  const scene=new THREE.Scene(),camera=new SpiderCamera([floor],1),controller=new SpiderController(new Spider(scene),camera,{pressed:()=>false},[floor]);
+  controller.restore([x,gardenHeight(x,z)+.245,z],[0,1,0],[1,0,0]);assert.ok(controller.position.y<-2);
+  controller.jump();for(let i=0;i<120;i++)controller.update(1/120,i/120);
+  assert.ok(controller.position.x>78);assert.ok(controller.position.z>75);assert.equal(controller.airborne,false);
+});
+test('the real far hollow has usable interior silk anchors and supports ceiling traversal',async()=>{
+  const {FarGarden}=await import(path.join(output,'src/world/FarGarden.js'));
+  const {gardenHeight}=await import(path.join(output,'src/world/WorldLayout.js'));
+  const scene=new THREE.Scene(),group=new THREE.Group(),surfaces=[];scene.add(group);
+  const material=new THREE.MeshStandardMaterial();new FarGarden(group,m=>{m.geometry.computeBoundingBox();group.add(m);surfaces.push(m);},material,material,{value:0},new THREE.Texture());scene.updateMatrixWorld(true);
+  const center=v(-95,gardenHeight(-95,-73)+3.25,-73),direction=v(0,1,0),hit=new THREE.Raycaster(center,direction,0,8).intersectObjects(surfaces,false)[0];assert.ok(hit);
+  const normal=surfaceNormal(hit,direction);assert.ok(normal.y<-.99);
+  const camera=new SpiderCamera(surfaces,1),controller=new SpiderController(new Spider(scene),camera,{pressed:c=>c==='KeyW'},surfaces);
+  controller.restore(hit.point.clone().addScaledVector(normal,.245).toArray(),normal.toArray(),[1,0,0]);camera.heading.set(1,0,0);
+  for(let i=0;i<180;i++){controller.update(1/120,i/120);camera.update(controller.position,controller.normal,1/120);}
+  assert.equal(controller.airborne,false);assert.ok(controller.normal.y<-.98);assert.ok(controller.position.x>-93);
 });

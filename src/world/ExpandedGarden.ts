@@ -5,6 +5,7 @@ type Solid=(mesh:THREE.Mesh)=>void;
 const v=(x:number,y:number,z:number)=>new THREE.Vector3(x,y,z);
 // All scenery is generated locally; shared geometry and instancing keep the larger garden affordable.
 export class ExpandedGarden {
+  private patches:THREE.Object3D[]=[];
   private randomState=91273;
   private rand(){this.randomState=(Math.imul(this.randomState,1664525)+1013904223)>>>0;return this.randomState/4294967296;}
   private between(a:number,b:number){return a+(b-a)*this.rand();}
@@ -130,10 +131,12 @@ export class ExpandedGarden {
     const dummy=new THREE.Object3D(),color=new THREE.Color();
     const palette=['#99aa68','#aeb872','#7e975e','#b7b47b','#76905c'];
     // Separate patches can be culled; the old dense starting garden is preserved.
-    for(let cx=-3;cx<=3;cx++)for(let cz=-3;cz<=3;cz++){
+    const reach=Math.ceil(FIELD_EXTENT/21);
+    for(let cx=-reach;cx<=reach;cx++)for(let cz=-reach;cz<=reach;cz++){
       if(Math.abs(cx)<=1&&Math.abs(cz)<=1)continue;
       const locations:THREE.Matrix4[]=[],colors:THREE.Color[]=[];
-      for(let i=0;i<420;i++){
+      const count=Math.abs(cx)>3||Math.abs(cz)>3?230:420;
+      for(let i=0;i<count;i++){
         const x=cx*21+this.between(-10.5,10.5),z=cz*21+this.between(-10.5,10.5);
         if(Math.abs(x)>FIELD_EXTENT||Math.abs(z)>FIELD_EXTENT)continue;
         // Winding open paths between clusters keep crawling and aiming readable.
@@ -141,7 +144,7 @@ export class ExpandedGarden {
         if(lane&&this.rand()<.87)continue;
         dummy.position.set(x,gardenHeight(x,z)-.02,z);dummy.rotation.set(0,this.rand()*6.28,0);dummy.scale.set(this.between(.65,1.6),this.between(.4,1.65),1);dummy.updateMatrix();locations.push(dummy.matrix.clone());colors.push(color.set(palette[i%5]).clone());
       }
-      const patch=new THREE.InstancedMesh(geo,mat,locations.length);locations.forEach((m,i)=>{patch.setMatrixAt(i,m);patch.setColorAt(i,colors[i]);});patch.receiveShadow=true;patch.computeBoundingSphere();this.group.add(patch);
+      const patch=new THREE.InstancedMesh(geo,mat,locations.length);locations.forEach((m,i)=>{patch.setMatrixAt(i,m);patch.setColorAt(i,colors[i]);});patch.receiveShadow=true;patch.computeBoundingSphere();this.group.add(patch);patch.userData.center=v(cx*21,0,cz*21);this.patches.push(patch);
     }
   }
   private outcrops(){
@@ -165,5 +168,8 @@ export class ExpandedGarden {
       color.set(['#81975d','#a6b674','#719259','#b6b37a'][i%4]);mesh.setColorAt(i,color);
     }
     mesh.computeBoundingSphere();mesh.receiveShadow=true;this.group.add(mesh);
+  }
+  update(player:THREE.Vector3){
+    for(const patch of this.patches){const center=patch.userData.center as THREE.Vector3;patch.visible=Math.hypot(center.x-player.x,center.z-player.z)<90;}
   }
 }

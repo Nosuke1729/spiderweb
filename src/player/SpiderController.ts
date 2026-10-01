@@ -5,7 +5,7 @@ import { Input } from '../core/Input';
 import { surfaceNormal, surfaceRotation } from './SurfaceMath';
 import { strandPoint, strandTangent, strandSag } from '../web/WebPath';
 import type { StrandReplacement } from '../web/WebManager';
-import { MAX_SAVE_POSITION } from '../world/WorldLayout';
+import { MAX_SAVE_POSITION,gardenHeight } from '../world/WorldLayout';
 
 const clearance = .245;
 export type PullTarget={position:THREE.Vector3;normal?:THREE.Vector3};
@@ -165,7 +165,9 @@ export class SpiderController {
         this.position.copy(hit.point).addScaledVector(hit.normal, clearance); this.transport(hit.normal);
         this.airborne = false; this.leapVelocity.set(0, 0, 0);
       } else this.position.add(step);
-      if (this.position.y < -2) { this.position.set(-3, .5, -2.5); this.normal.set(0, 1, 0); this.airborne = false; this.leapVelocity.set(0, 0, 0); }
+      if (this.position.y < gardenHeight(this.position.x,this.position.z)-6) {
+        this.position.set(-3,.5,-2.5);this.normal.set(0,1,0);this.heading.set(-.65,0,-.76).normalize();this.lastDrive.set(0,0,0);this.airborne=false;this.leapVelocity.set(0,0,0);
+      }
     } else {
       const direction = drive.lengthSq() > .01 ? drive : this.lastDrive;
       const step = direction.clone().multiplyScalar(this.speed * dt);

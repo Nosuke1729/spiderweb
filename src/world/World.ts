@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { installTerrainRaycast } from './Terrain';
 import { ExpandedGarden } from './ExpandedGarden';
+import { FarGarden } from './FarGarden';
 import { gardenHeight,TERRAIN_SIZE } from './WorldLayout';
 
 const seed = (n: number) => {
@@ -70,6 +71,9 @@ export class World {
   private motePositions!: Float32Array;
   private water!: THREE.Mesh;
   private waterTime = { value: 0 };
+  private expanded:ExpandedGarden;
+  private far:FarGarden;
+  private sky:THREE.Mesh;
 
   constructor(scene: THREE.Scene) {
     scene.background = new THREE.Color('#c6c6aa');
@@ -80,6 +84,7 @@ export class World {
       fragmentShader:`varying vec3 vWorld; void main(){float h=clamp(vWorld.y/235.,-.25,1.);vec3 horizon=vec3(.88,.78,.63);vec3 top=vec3(.50,.64,.66);vec3 below=vec3(.48,.52,.43);vec3 col=h<0.?mix(below,horizon,smoothstep(-.25,0.,h)):mix(horizon,top,smoothstep(0.,.85,h));gl_FragColor=vec4(col,1.);}`
     }));
     sky.frustumCulled=false;scene.add(sky);
+    this.sky=sky;
     const sunCanvas=document.createElement('canvas');sunCanvas.width=sunCanvas.height=128;
     const ctx=sunCanvas.getContext('2d')!;
     const gradient=ctx.createRadialGradient(64,64,2,64,64,64);
@@ -106,7 +111,7 @@ export class World {
     scene.add(this.sun, this.sun.target);
     const earth=texture('earth');
     const gmat = new THREE.MeshStandardMaterial({ map: earth, bumpMap:earth, bumpScale:.065, roughness: .97, color: '#c8c3a3' });
-    gmat.map!.repeat.set(21.6, 21.6);
+    gmat.map!.repeat.set(TERRAIN_SIZE*.12, TERRAIN_SIZE*.12);
     const groundGeometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SIZE);
     groundGeometry.rotateX(-Math.PI / 2);
     const p = groundGeometry.attributes.position;
@@ -138,7 +143,9 @@ export class World {
     const outerWood=new THREE.MeshStandardMaterial({map:outerWoodTexture,bumpMap:outerWoodTexture,bumpScale:.12,color:'#baa187',roughness:.97});
     const outerStoneTexture=texture('stone');outerStoneTexture.repeat.set(2,2);
     const outerStone=new THREE.MeshStandardMaterial({map:outerStoneTexture,bumpMap:outerStoneTexture,bumpScale:.09,color:'#d0d7cf',roughness:.93});
-    new ExpandedGarden(this.group,mesh=>this.addSolid(mesh),outerWood,outerStone,this.windUniform,texture('leaf'));
+    const leaf=texture('leaf');
+    this.expanded=new ExpandedGarden(this.group,mesh=>this.addSolid(mesh),outerWood,outerStone,this.windUniform,leaf);
+    this.far=new FarGarden(this.group,mesh=>this.addSolid(mesh),outerWood,outerStone,this.windUniform,leaf);
   }
 
   height(x: number, z: number): number {
@@ -523,6 +530,7 @@ export class World {
   }
 
   update(t: number, dt: number, focus?:THREE.Vector3) {
+    if(focus){this.expanded.update(focus);this.far.update(t,focus);this.sky.position.copy(focus);}
     this.windUniform.value=t;
     this.waterTime.value=t;
     if(focus){
@@ -531,6 +539,7 @@ export class World {
     }
     const p=this.motePositions;
     for(let i=0;i<p.length;i+=3){p[i]+=.05*dt;p[i+1]+=(.03+Math.sin(t*.7+i)*.015)*dt;if(p[i]>28)p[i]=-28;if(p[i+1]>14)p[i+1]=.4;}
+    if(focus)this.motes.position.set(focus.x,focus.y-.25,focus.z);
     this.motes.geometry.attributes.position.needsUpdate=true;
   }
 }

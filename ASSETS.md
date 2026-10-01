@@ -4,7 +4,7 @@ No external art, models, textures, fonts, or audio files are used in the current
 
 | Asset | Source | License | Usage |
 | --- | --- | --- | --- |
-| Garden geometry, spider, insects, leaves, ferns, mushrooms, lantern, garden arch, broken pot, outer trees, and silk | Original procedural code in this repository | Original project work | Runtime generated meshes |
+| Garden geometry, spider, flies, moths, butterflies, dragonflies, beetles, snails, frogs, mice, leaves, ferns, mushrooms, lantern, garden arch, broken pot, outer trees, hollow trunk, reedwater, berry thicket, and silk | Original procedural code in this repository | Original project work | Runtime generated meshes |
 | Earth, bark, wood, leaf, and stone texture patterns | Original procedural canvas code in `src/world/World.ts` | Original project work | Runtime generated textures |
 | Wind ambience and interaction tones | Original Web Audio synthesis in `src/audio/AudioManager.ts` | Original project work | Runtime generated sound |
 | Three.js | [threejs.org](https://threejs.org/) | MIT | Rendering and math library |

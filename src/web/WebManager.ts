@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { strandPoint, strandSag, strandTangent } from './WebPath';
+import { MAX_SAVE_POSITION } from '../world/WorldLayout';
 
 export type WebNode={id:number;position:THREE.Vector3;strands:Set<number>};
 export type WebStrand={id:number;a:number;b:number;length:number;tension:number;sag:number;integrity:number;energy:number;phase:number;pulse:number};
 export type WebAnchor={position:THREE.Vector3;normal?:THREE.Vector3;strandId?:number;t?:number};
 export type StrandReplacement={strand:WebStrand;from:number;to:number};
 export type WebSave={nodes:{id:number;position:number[]}[];strands:{id:number;a:number;b:number;sag?:number}[]};
+export type WebContact={strand:WebStrand;point:THREE.Vector3;t:number;distance:number};
 
 export class WebManager {
   readonly nodes=new Map<number,WebNode>();
@@ -107,6 +109,24 @@ export class WebManager {
     this.junctions.count=count;this.junctions.instanceMatrix.needsUpdate=true;this.junctions.computeBoundingSphere();
   }
   getEndpoints(s:WebStrand){return [this.nodes.get(s.a)!.position,this.nodes.get(s.b)!.position] as const;}
+  getNearbyStrands(position:THREE.Vector3,radius:number){
+    const contacts:WebContact[]=[],last=new THREE.Vector3(),next=new THREE.Vector3(),delta=new THREE.Vector3(),point=new THREE.Vector3();
+    for(const strand of this.strands.values()){
+      const [a,b]=this.getEndpoints(strand);delta.copy(b).sub(a);
+      const straight=THREE.MathUtils.clamp(point.copy(position).sub(a).dot(delta)/delta.lengthSq(),0,1);
+      if(point.copy(a).addScaledVector(delta,straight).distanceTo(position)>radius+strand.sag)continue;
+      let best:WebContact|undefined;last.copy(a);
+      for(let i=0;i<this.segments;i++){
+        strandPoint(a,b,strand.tension,(i+1)/this.segments,next,strand.sag);delta.copy(next).sub(last);
+        const u=THREE.MathUtils.clamp(point.copy(position).sub(last).dot(delta)/delta.lengthSq(),0,1);
+        point.copy(last).addScaledVector(delta,u);const distance=point.distanceTo(position);
+        if(distance<=radius&&(!best||distance<best.distance))best={strand,point:point.clone(),t:(i+u)/this.segments,distance};
+        last.copy(next);
+      }
+      if(best)contacts.push(best);
+    }
+    return contacts.sort((a,b)=>a.distance-b.distance);
+  }
   getNearestPoint(position:THREE.Vector3,max=.65,reachable:(point:THREE.Vector3)=>boolean=()=>true){
     let closest:{strand:WebStrand;point:THREE.Vector3;t:number;distance:number}|undefined;
     const delta=new THREE.Vector3(),point=new THREE.Vector3(),last=new THREE.Vector3(),next=new THREE.Vector3();
@@ -216,7 +236,7 @@ export class WebManager {
     if(!data||!Array.isArray(data.nodes)||!Array.isArray(data.strands)||data.nodes.length>500||data.strands.length>240)return;
     const nodes=new Map<number,WebNode>(),strands=new Map<number,WebStrand>();
     for(const node of data.nodes){
-      if(!Number.isSafeInteger(node.id)||node.id<1||nodes.has(node.id)||!Array.isArray(node.position)||node.position.length!==3||!node.position.every(v=>Number.isFinite(v)&&Math.abs(v)<100))return;
+      if(!Number.isSafeInteger(node.id)||node.id<1||nodes.has(node.id)||!Array.isArray(node.position)||node.position.length!==3||!node.position.every(v=>Number.isFinite(v)&&Math.abs(v)<=MAX_SAVE_POSITION))return;
       nodes.set(node.id,{id:node.id,position:new THREE.Vector3().fromArray(node.position),strands:new Set()});
     }
     for(const entry of data.strands){
