@@ -22,3 +22,12 @@ export function prepareWildlifeQA(mode:string,web:WebManager,creatures:InsectMan
   controller.position.set(center.x,gardenHeight(center.x,center.z+.4)+.245,center.z+.4);controller.heading.set(0,0,-1);camera.heading.copy(controller.heading);
   return mouse;
 }
+
+export function prepareCreatureReview(creatures:InsectManager,controller:SpiderController,camera:SpiderCamera){
+  for(const [id,x,angle] of [['frog',-3.8,0],['snail',-2.3,Math.PI/2]] as const){
+    const creature=creatures.insects.find(c=>c.species.id===id)!;
+    creature.position.set(x,gardenHeight(x,-3)+creature.species.lift,-3);creature.group.position.copy(creature.position);
+    creature.group.rotation.y=angle;creature.home.copy(creature.position);creature.velocity.set(0,0,0);creature.rest=3600;
+  }
+  controller.position.set(-3,gardenHeight(-3,-1.6)+.245,-1.6);controller.heading.set(0,0,-1);camera.heading.copy(controller.heading);
+}

@@ -17,13 +17,16 @@ Play at [nosuke1729.github.io/spiderweb](https://nosuke1729.github.io/spiderweb/
 | Shift | Scurry |
 | Space | Leap from a surface or strand |
 | Left click | Fire silk from the spider; two successful shots create a strand |
-| Right mouse | Aim closer; drag to orbit if pointer lock is unavailable |
+| Right mouse | Steady precision aim, with slower look and slightly wider thread assistance; drag to orbit without pointer lock |
+| C | Toggle continuous weaving; keep each completed endpoint as the next hold |
 | E | Climb onto nearby silk or release a caught creature |
 | F | Pull toward the fired anchor; press again to release |
 | R | Cut nearby silk (warm highlight), or release loose silk if no strand is nearby |
 | Escape | Pause |
 
 Aim at a solid surface and click to fire silk. The projectile travels from the spider, lands on the first surface it meets, and has a limited range. Then fire at another surface to complete the strand. A span crossing wood, stone, or terrain is rejected. Moving grass and loose canopy leaves cannot hold a permanent anchor. Aim at any part of an existing thread: a small glint and **CLICK · JOIN THIS THREAD** show the attachment point. Fire there, then at another thread or surface. The original threads split at real graph junctions, allowing a frame, spokes, and cross-links to grow into your own web. Connected junctions carry vibrations and let the spider change paths. Merely overlapping threads are not automatically glued; fire at a thread to join it.
+
+To build a net, press **C** for continuous weaving. Once the first strand is finished, its new endpoint remains attached: each click adds the next strand. Close a frame, then aim at thread interiors to add connected cross-links. Press C again to finish the chain; completed silk remains. The ordinary two-shot mode remains available with chain off. A small screen-space aim assist prefers nearby knots, with a glint showing the actual selected point. Hold right mouse for finer look control and slightly more assistance. A faint dashed curve previews the span; warm color and short hints identify obstructions, excessive length, or already connected points. You still fire real projectiles, and range, obstacles, web density, and capture requirements still apply.
 
 After your first shot attaches, press **F** to pull yourself toward that anchor. F again releases the pull; Space interrupts it with a leap. Wood and stone block your body. Arrival keeps the anchor and loose thread, so clicking another surface or thread still completes a permanent strand. Click during a pull to stop reeling and fire the second endpoint. Approach a completed strand and press **R** to cut it without carefully aiming: the selected strand glows warm gold. The thread underfoot has priority; among nearby threads, aiming chooses one, otherwise the closest reachable thread is selected. Walls shield threads. Cutting is saved immediately. If no completed strand is nearby, R releases the loose anchor first, or cuts an aimed completed strand when no loose silk remains.
 

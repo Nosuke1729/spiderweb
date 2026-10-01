@@ -4,7 +4,7 @@ import { MAX_SAVE_POSITION } from '../world/WorldLayout';
 
 export type WebNode={id:number;position:THREE.Vector3;strands:Set<number>};
 export type WebStrand={id:number;a:number;b:number;length:number;tension:number;sag:number;integrity:number;energy:number;phase:number;pulse:number};
-export type WebAnchor={position:THREE.Vector3;normal?:THREE.Vector3;strandId?:number;t?:number};
+export type WebAnchor={position:THREE.Vector3;normal?:THREE.Vector3;nodeId?:number;strandId?:number;t?:number};
 export type StrandReplacement={strand:WebStrand;from:number;to:number};
 export type WebSave={nodes:{id:number;position:number[]}[];strands:{id:number;a:number;b:number;sag?:number}[]};
 export type WebContact={strand:WebStrand;point:THREE.Vector3;t:number;distance:number};
@@ -49,12 +49,30 @@ export class WebManager {
     this.strands.set(strand.id,strand);na.strands.add(strand.id);nb.strands.add(strand.id);return strand;
   }
   anchorPosition(anchor:WebAnchor){
+    if(anchor.nodeId!==undefined)return this.nodes.get(anchor.nodeId)?.position.clone();
     if(anchor.strandId===undefined)return anchor.position.clone();
     const strand=this.strands.get(anchor.strandId);
     return strand&&anchor.t!==undefined&&Number.isFinite(anchor.t)&&anchor.t>=0&&anchor.t<=1?this.sample(strand,anchor.t):undefined;
   }
+  nodeAnchor(position:THREE.Vector3,normal?:THREE.Vector3):WebAnchor|undefined{
+    const node=this.nearestNode(position);
+    return node?{position:node.position.clone(),nodeId:node.id,normal:normal?.clone()}:undefined;
+  }
+  connectionProblem(a:WebAnchor,b:WebAnchor){
+    const pa=this.anchorPosition(a),pb=this.anchorPosition(b);
+    if(!pa||!pb||pa.distanceTo(pb)<.3)return 'same';
+    const na=this.nearestNode(pa),nb=this.nearestNode(pb);
+    if(na&&nb){
+      if(na===nb)return 'same';
+      for(const id of na.strands){const s=this.strands.get(id)!;if(s.a===nb.id||s.b===nb.id)return 'duplicate';}
+    }
+    if(a.strandId!==undefined&&a.strandId===b.strandId)return 'duplicate';
+    const splits=[a,b].filter((anchor,i)=>{const strand=anchor.strandId!==undefined?this.strands.get(anchor.strandId):undefined;const node=i===0?na:nb;return strand&&node?.id!==strand.a&&node?.id!==strand.b;}).length;
+    return this.strands.size+splits+1>240?'capacity':undefined;
+  }
   // Resolve both attachments before changing the graph. A failed shot must not damage existing silk.
   connect(a:WebAnchor,b:WebAnchor){
+    if(this.connectionProblem(a,b))return false;
     const pa=this.anchorPosition(a),pb=this.anchorPosition(b);
     if(!pa||!pb||pa.distanceTo(pb)<.3)return false;
     const existingA=this.nearestNode(pa),existingB=this.nearestNode(pb);

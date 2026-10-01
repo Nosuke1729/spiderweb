@@ -10,15 +10,16 @@ import { SpiderController } from '../player/SpiderController';
 import { WebManager } from '../web/WebManager';
 import { InsectManager } from '../creatures/InsectManager';
 import { SPECIES,type SpeciesId } from '../creatures/Species';
-import { prepareWildlifeQA } from './WildlifeQA';
+import { prepareWildlifeQA,prepareCreatureReview } from './WildlifeQA';
 import { AudioManager } from '../audio/AudioManager';
 import { Input } from './Input';
 import { SilkLauncher } from '../web/SilkLauncher';
+import { SilkAim } from '../web/SilkAim';
 import { WebInteraction } from '../web/WebInteraction';
 import { Exploration } from '../world/Exploration';
 import { OUTER_HABITATS } from '../world/WorldLayout';
 
-type Save={version:2|3|4|5;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;sensitivity?:number;discovered?:string[];catches?:number;wildlife?:Partial<Record<SpeciesId,number>>};
+type Save={version:2|3|4|5;player:number[];normal?:number[];heading?:number[];web:ReturnType<WebManager['serialize']>;quality:'high'|'low';muted:boolean;chaining?:boolean;sensitivity?:number;discovered?:string[];catches?:number;wildlife?:Partial<Record<SpeciesId,number>>};
 const saveKey='spiderweb-garden-v2';
 
 export class Game {
@@ -37,6 +38,7 @@ export class Game {
   private bloom:UnrealBloomPass;
   private ray=new THREE.Raycaster();
   readonly launcher:SilkLauncher;
+  private silkTargeting:SilkAim;
   private silkInteraction:WebInteraction;
   readonly exploration=new Exploration();
   private catches=0;
@@ -111,6 +113,7 @@ export class Game {
     this.world=new World(this.scene);this.scene.updateMatrixWorld(true);
     this.web=new WebManager(this.scene);
     this.silkInteraction=new WebInteraction(this.web,this.world.colliders);
+    this.silkTargeting=new SilkAim(this.web,this.world.anchors.filter(o=>!(o instanceof THREE.InstancedMesh)));
     this.silkAim.visible=false;this.scene.add(this.silkAim);
     this.spider=new Spider(this.scene);
     this.camera=new SpiderCamera(this.world.colliders,innerWidth/innerHeight);
@@ -130,7 +133,15 @@ export class Game {
     if(import.meta.env.DEV)this.qa=new URLSearchParams(location.search).get('qa')??'';
     this.setupControls();if(!this.qa)this.load();this.resize();
     if(import.meta.env.DEV){
-      if(this.qa==='weaknet'||this.qa==='strongnet'){
+      if(this.qa==='models'||this.qa==='weave'){
+        if(this.qa==='models')prepareCreatureReview(this.insects,this.controller,this.camera);
+        else{
+          const points=[new THREE.Vector3(-4.3,.85,-5.5),new THREE.Vector3(-1.7,.85,-5.5),new THREE.Vector3(-1.7,2.45,-5.5),new THREE.Vector3(-4.3,2.45,-5.5)];
+          for(let i=0;i<3;i++)this.web.add(points[i],points[i+1]);
+          this.controller.position.set(-3,.245,-2);this.controller.heading.set(0,0,-1);this.camera.heading.copy(this.controller.heading);
+        }
+        this.started=true;this.qaDone=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');this.updateCount();
+      }else if(this.qa==='weaknet'||this.qa==='strongnet'){
         prepareWildlifeQA(this.qa,this.web,this.insects,this.controller,this.camera);
         this.started=true;this.startScreen.classList.add('hidden');this.hud.classList.add('visible');this.updateCount();
       }else if(this.qa==='cut'||this.qa==='pull'){
@@ -199,6 +210,12 @@ export class Game {
     this.input.onPrimary=()=>this.attach();
     this.input.onSecondary=on=>this.camera.setAim(on);
     this.input.onCut=()=>this.cut();
+    this.input.onWeave=()=>{
+      if(!this.started||this.paused)return;
+      this.launcher.chaining=!this.launcher.chaining;
+      if(!this.launcher.chaining&&!this.launcher.flying){this.controller.stopPull();this.launcher.cancel();}
+      this.message(this.launcher.chaining?'Continuous weaving: each new endpoint becomes your next hold. C ends the chain.':'Chain ended. Two landed shots weave a separate strand.');this.save();
+    };
     this.input.onPull=()=>this.pull();
     this.input.onInteract=()=>this.interact();
     this.input.onJump=()=>{if(this.started&&!this.paused)this.controller.jump();};
@@ -246,7 +263,7 @@ export class Game {
     this.audio.start();void this.input.lock().then(locked=>this.message(locked?'Look toward a surface and click to fire silk. Wheel zooms; Q centers the view.':'Drag to look around. Click to fire silk; wheel zooms; Q centers the view.'));
     this.updateDiscoveries();
   }
-  private pause(){this.input.clear();this.silkAim.visible=false;this.updateDiscoveries();this.paused=true;this.pauseScreen.classList.remove('hidden');this.hud.classList.remove('visible');this.input.unlock();this.save();}
+  private pause(){this.input.clear();this.silkAim.visible=false;this.launcher.showGuide();this.updateDiscoveries();this.paused=true;this.pauseScreen.classList.remove('hidden');this.hud.classList.remove('visible');this.input.unlock();this.save();}
   private resume(){this.paused=false;this.pauseScreen.classList.add('hidden');this.hud.classList.add('visible');void this.input.lock();}
   private aimRay(){
     this.ray.setFromCamera(this.input.locked?new THREE.Vector2(0,0):new THREE.Vector2(this.input.pointer.x,this.input.pointer.y),this.camera.camera);
@@ -254,11 +271,17 @@ export class Game {
   }
   private attach(){
     if(!this.started||this.paused)return;
-    const ray=this.aimRay();
-    const hit=ray.intersectObjects(this.world.anchors.filter(o=>!(o instanceof THREE.InstancedMesh)),false)[0];
-    const silk=this.web.raycast(ray.ray.origin,ray.ray.direction,hit?.distance??60);
-    const target=silk?.point??hit?.point??ray.ray.at(40,new THREE.Vector3());
+    const {target}=this.aimTarget();
+    this.launcher.showGuide();
     if(this.launcher.shoot(target))this.controller.stopPull();
+  }
+  private aimTarget(){
+    const ray=this.aimRay(),hit=ray.intersectObjects(this.world.anchors.filter(o=>!(o instanceof THREE.InstancedMesh)),false)[0];
+    const pointer=this.input.locked?new THREE.Vector2():new THREE.Vector2(this.input.pointer.x,this.input.pointer.y);
+    const silk=this.silkTargeting.pick(this.camera.camera,pointer,this.canvas.clientWidth,this.canvas.clientHeight,this.input.aiming);
+    const target=silk?.anchor.position??hit?.point??ray.ray.at(40,new THREE.Vector3());
+    const preview=this.launcher.preview(target);
+    return {ray,hit,silk,target,preview};
   }
   private pull(){
     if(!this.started||this.paused)return;
@@ -314,23 +337,26 @@ export class Game {
   }
   private updatePrompt(){
     if(!this.started||this.paused)return;
-    const ray=this.aimRay();
-    const hit=ray.intersectObjects(this.world.colliders,false)[0];
-    const silk=this.web.raycast(ray.ray.origin,ray.ray.direction,hit?.distance??60);
-    const target=silk?.point??hit?.point;
-    const preview=target?this.launcher.preview(target):undefined;
+    const {ray,hit,silk,preview}=this.aimTarget();
+    const target=!!silk||!!hit;
     const ready=!!preview?.hit&&preview.inRange&&!preview.blocked;
     this.reticle.classList.toggle('active',ready);this.reticle.classList.toggle('blocked',!!hit&&!ready);
     this.reticle.classList.toggle('on-silk',!!silk&&ready);
-    this.silkAim.visible=!!silk&&ready&&!this.launcher.flying;if(silk)this.silkAim.position.copy(silk.point);
+    this.silkAim.visible=!!silk&&ready&&!this.launcher.flying;if(silk)this.silkAim.position.copy(silk.anchor.position);
+    this.launcher.showGuide(ready?preview.anchor:undefined);
     this.reticle.style.left=this.input.locked?'50%':`${(this.input.pointer.x+1)*50}%`;
     this.reticle.style.top=this.input.locked?'50%':`${(1-this.input.pointer.y)*50}%`;
     const near=this.web.getNearestPoint(this.controller.position,.65);
     const cut=this.silkInteraction.cutTarget(this.controller.position,this.controller.rideId(),ray.ray);
     this.web.selectedId=cut&&(cut.near||(!this.launcher.pending&&!this.launcher.flying))?cut.strand.id:undefined;
-    this.prompt.textContent=this.launcher.flying?'SILK IN FLIGHT':silk&&ready?'CLICK · JOIN THIS THREAD':this.controller.isRiding()?'W/S · FOLLOW SILK · SPACE TO LEAP':near&&!this.launcher.pending?'E · TRAVERSE SILK':this.launcher.pending?'CLICK · FIRE SECOND ANCHOR':ready?'CLICK · FIRE SILK':target?'MOVE CLOSER · FIND A CLEAR SHOT':'';
+    this.prompt.textContent=this.launcher.flying?'SILK IN FLIGHT':silk&&ready?(silk.anchor.nodeId!==undefined?'CLICK · JOIN THIS KNOT':'CLICK · JOIN THIS THREAD'):this.controller.isRiding()?'W/S · FOLLOW SILK · SPACE TO LEAP':near&&!this.launcher.pending?'E · TRAVERSE SILK':this.launcher.pending?'CLICK · FIRE SECOND ANCHOR':ready?'CLICK · FIRE SILK':target?'MOVE CLOSER · FIND A CLEAR SHOT':'';
     if(this.controller.isPulling())this.prompt.textContent='PULLING · F RELEASE · SPACE LEAP';
-    else if(this.launcher.pending&&!this.launcher.flying)this.prompt.textContent='F · PULL TO ANCHOR · CLICK TO WEAVE';
+    else if(this.launcher.pending&&!this.launcher.flying){
+      const problem=ready&&preview.anchor?this.launcher.spanStatus(preview.anchor):undefined;
+      const advice=problem==='blocked'?'SPAN BLOCKED · CHOOSE A CLEAR PATH':problem==='long'?'SPAN TOO LONG · CHOOSE A CLOSER HOLD':problem==='duplicate'?'ALREADY CONNECTED · CHOOSE ANOTHER HOLD':problem==='same'?'CHOOSE A SEPARATE HOLD':problem==='capacity'?'CUT OLD SILK TO MAKE ROOM':ready?(silk?.anchor.nodeId!==undefined?'CLICK · CLOSE THE KNOT':silk?'CLICK · CROSS-LINK THIS THREAD':'CLICK · WEAVE HERE'):'AIM AT A CLEAR HOLD';
+      this.prompt.textContent=`${advice} · F PULL${this.launcher.chaining?' · C END CHAIN':''}`;
+      this.reticle.classList.toggle('blocked',!!problem||!ready);this.reticle.classList.toggle('active',ready&&!problem);
+    }
     if(cut?.near)this.prompt.textContent+=' · R CUT NEARBY THREAD';
     else if(this.launcher.pending)this.prompt.textContent+=' · R RELEASE';
     const caught=this.insects.nearbyCaught(this.controller.position);
@@ -339,16 +365,17 @@ export class Game {
       if(caught)this.prompt.textContent=`E · RELEASE ${caught.species.name.toUpperCase()}`;
       else if(creature)this.prompt.textContent=creature.caught?`${creature.species.name.toUpperCase()} · HELD IN SILK`:`${creature.species.name.toUpperCase()} · ${creature.species.threads}+ THREADS${creature.species.loops?` · ${creature.species.loops} CLOSED LOOPS`:''}`;
     }
-    this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>F</b> pull <span>·</span> <b>R</b> cut`;
+    this.root.querySelector('.hint')!.innerHTML=`<b>WASD</b> move <span>·</span> <b>${this.input.locked?'MOUSE':'DRAG'}</b> look <span>·</span> <b>SHIFT</b> scurry <span>·</span> <b>SPACE</b> leap <span>·</span> <b>CLICK</b> fire silk <span>·</span> <b>RMB</b> aim <span>·</span> <b>C</b> chain ${this.launcher.chaining?'ON':'off'} <span>·</span> <b>WHEEL</b> zoom <span>·</span> <b>Q</b> center <span>·</span> <b>E</b> use silk <span>·</span> <b>F</b> pull <span>·</span> <b>R</b> cut`;
   }
   private save(){
     if(this.qa)return;
-    try{const data:Save={version:5,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches,wildlife:this.wildlife};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
+    try{const data:Save={version:5,player:this.controller.position.toArray(),normal:this.controller.normal.toArray(),heading:this.controller.heading.toArray(),web:this.web.serialize(),quality:this.quality,muted:!this.audio.enabled,chaining:this.launcher.chaining,sensitivity:this.camera.sensitivity,discovered:[...this.exploration.discovered],catches:this.catches,wildlife:this.wildlife};localStorage.setItem(saveKey,JSON.stringify(data));}catch{}
   }
   private load(){
     try{
       const value=localStorage.getItem(saveKey);if(!value)return;const data=JSON.parse(value) as Save;
       if(data.version!==2&&data.version!==3&&data.version!==4&&data.version!==5)return;
+      this.launcher.chaining=data.chaining===true;
       this.controller.restore(data.player,data.normal,data.heading);
       this.camera.heading.copy(this.controller.heading);
       this.camera.sensitivity=typeof data.sensitivity==='number'&&Number.isFinite(data.sensitivity)?THREE.MathUtils.clamp(data.sensitivity,.4,1.8):1;

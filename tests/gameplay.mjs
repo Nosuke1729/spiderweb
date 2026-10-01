@@ -377,3 +377,46 @@ test('the real far hollow has usable interior silk anchors and supports ceiling 
   for(let i=0;i<180;i++){controller.update(1/120,i/120);camera.update(controller.position,controller.normal,1/120);}
   assert.equal(controller.airborne,false);assert.ok(controller.normal.y<-.98);assert.ok(controller.position.x>-93);
 });
+
+const {SilkAim}=await import(path.join(output,'src/web/SilkAim.js'));
+test('screen-space silk aiming prefers nearby knots and refuses distant or occluded targets',()=>{
+  const scene=new THREE.Scene(),web=new WebManager(scene),surfaces=[],picker=new SilkAim(web,surfaces);
+  web.add(v(-1,1,-5),v(1,1,-5));
+  const camera=new THREE.PerspectiveCamera(64,16/9,.025,280);camera.position.set(0,1,0);camera.lookAt(v(0,1,-5));camera.updateMatrixWorld();
+  const knot=v(-1,1,-5).project(camera),cursor=new THREE.Vector2(knot.x+20/1280,knot.y);
+  const picked=picker.pick(camera,cursor,1280,720);assert.equal(picked.anchor.nodeId,1);
+  const center=web.sample(web.strands.get(1),.5).project(camera);
+  assert.ok(picker.pick(camera,new THREE.Vector2(center.x,center.y+20/720),1280,720));
+  assert.equal(picker.pick(camera,new THREE.Vector2(center.x,center.y+70/720),1280,720),undefined);
+  surfaces.push(box(scene,0,1,-3,4,4,.4));assert.equal(picker.pick(camera,cursor,1280,720),undefined);
+  surfaces.length=0;camera.position.z=20;camera.lookAt(v(0,1,-5));camera.updateMatrixWorld();
+  const far=web.sample(web.strands.get(1),.5).project(camera);
+  assert.equal(picker.pick(camera,new THREE.Vector2(far.x,far.y),1280,720),undefined);
+});
+test('continuous weaving closes a connected frame with five physical shots and retains a real endpoint',()=>{
+  const f=launcherFixture();f.origin.set(0,2,3);f.launcher.chaining=true;
+  const points=[v(-3,2,-5),v(3,2,-5),v(3,5,-5),v(-3,5,-5)];
+  for(const point of points)f.surfaces.push(box(f.scene,...point.toArray(),.4,.4,.3));
+  for(const point of [...points,points[0]]){assert.ok(f.launcher.shoot(point));finish(f.launcher);assert.ok(f.launcher.pending);}
+  assert.equal(f.web.strands.size,4);assert.equal(f.web.nodes.size,4);assert.equal(f.web.components().length,1);
+  assert.ok(f.launcher.pending.nodeId);assert.equal(f.web.connectionProblem(f.launcher.pending,f.web.nodeAnchor(points[1].clone().add(v(0,0,.215)))),'duplicate');
+  assert.equal(f.web.strands.size-f.web.nodes.size+1,1);
+  f.launcher.chaining=false;f.surfaces.push(box(f.scene,0,6,-5,.4,.4,.3));f.launcher.shoot(v(0,6,-5));finish(f.launcher);
+  assert.equal(f.launcher.pending,undefined);assert.equal(f.web.strands.size,5);
+});
+test('continuous weaving survives splitting a thread and loses its hold only when that node is removed',()=>{
+  const f=launcherFixture();f.origin.set(0,2,3);f.launcher.chaining=true;
+  f.web.add(v(-4,3,-5),v(4,3,-5));f.web.add(v(4,3,-5),v(4,3,-1));
+  f.launcher.shoot(f.web.sample(f.web.strands.get(1),.5));finish(f.launcher);
+  f.launcher.shoot(f.web.sample(f.web.strands.get(2),.5));finish(f.launcher);
+  assert.ok(f.launcher.pending.nodeId);assert.ok(f.web.anchorPosition(f.launcher.pending));assert.equal(f.launcher.pending.strandId,undefined);
+  const node=f.web.nodes.get(f.launcher.pending.nodeId),one=[...node.strands][0];f.web.remove(one);f.launcher.update(.01);assert.ok(f.launcher.pending);
+  for(const id of [...node.strands])f.web.remove(id);f.launcher.update(.01);assert.equal(f.launcher.pending,undefined);
+});
+test('span guidance predicts obstruction and duplicates without creating or splitting strands',()=>{
+  const f=launcherFixture();f.launcher.pending={position:v(-3,2,-5)};
+  const other={position:v(3,2,-5)};assert.equal(f.launcher.spanStatus(other),undefined);
+  f.surfaces.push(box(f.scene,0,2,-5,1,3,2));assert.equal(f.launcher.spanStatus(other),'blocked');
+  assert.equal(f.launcher.spanStatus({position:v(30,2,-5)}),'long');assert.equal(f.web.strands.size,0);
+  f.surfaces.length=0;f.web.add(f.launcher.pending.position,other.position);assert.equal(f.launcher.spanStatus(other),'duplicate');assert.equal(f.web.strands.size,1);
+});

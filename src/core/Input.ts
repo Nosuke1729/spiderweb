@@ -3,12 +3,14 @@ export class Input {
   readonly pointer = { x: 0, y: 0 };
   locked = false;
   dragging = false;
+  aiming=false;
   onLook: (dx: number, dy: number) => void = () => {};
   onZoom: (delta: number) => void = () => {};
   onRecenter: () => void = () => {};
   onPrimary: () => void = () => {};
   onSecondary: (active: boolean) => void = () => {};
   onCut: () => void = () => {};
+  onWeave: () => void = () => {};
   onPull: () => void = () => {};
   onInteract: () => void = () => {};
   onPause: () => void = () => {};
@@ -24,6 +26,7 @@ export class Input {
       if (e.repeat) return;
       if (e.code === 'Space') this.onJump();
       if (e.code === 'KeyR') this.onCut();
+      if (e.code === 'KeyC') this.onWeave();
       if (e.code === 'KeyF') this.onPull();
       if (e.code === 'KeyE') this.onInteract();
       if (e.code === 'KeyQ') this.onRecenter();
@@ -54,18 +57,18 @@ export class Input {
         this.press = { x: e.clientX, y: e.clientY, button: e.button };
         this.dragging = false;
       }
-      if (e.button === 2) this.onSecondary(true);
+      if (e.button === 2) {this.aiming=true;this.onSecondary(true);}
     });
     document.addEventListener('mouseup', e => {
       if (e.button === 0 && this.press?.button === 0 && !this.dragging) this.onPrimary();
-      this.press = undefined;
+      this.press = e.button===0&&this.aiming?{x:e.clientX,y:e.clientY,button:2}:undefined;
       this.dragging = false;
-      if (e.button === 2) this.onSecondary(false);
+      if (e.button === 2) {this.aiming=false;this.onSecondary(false);}
     });
     canvas.addEventListener('wheel', e => { e.preventDefault(); this.onZoom(e.deltaY); }, { passive: false });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
   }
-  clear() { this.keys.clear(); this.press = undefined; this.dragging = false; this.onSecondary(false); }
+  clear() { this.keys.clear(); this.press = undefined; this.dragging = false; this.aiming=false;this.onSecondary(false); }
   pressed(...codes: string[]) { return codes.some(c => this.keys.has(c)); }
   async lock() {
     this.canvas.focus({ preventScroll: true });

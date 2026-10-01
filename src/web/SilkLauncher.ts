@@ -9,11 +9,13 @@ type Shot = { position: THREE.Vector3; direction: THREE.Vector3; distance: numbe
 
 export class SilkLauncher {
   pending?: WebAnchor;
+  chaining=false;
   private shot?: Shot;
   private ray = new THREE.Raycaster();
   private head: THREE.Mesh;
   private trail: THREE.Line;
   private tether: THREE.Line;
+  private guide:THREE.Line;
   private fade = 0;
   onMessage: (text: string) => void = () => {};
   onLaunch: () => void = () => {};
@@ -25,6 +27,8 @@ export class SilkLauncher {
     this.trail = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), material);
     this.tether = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), material.clone());
     this.head = new THREE.Mesh(new THREE.SphereGeometry(.037, 8, 6), new THREE.MeshBasicMaterial({ color: '#efffff' }));
+    this.guide=new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({length:17},()=>new THREE.Vector3())),new THREE.LineDashedMaterial({color:'#a6dcd5',transparent:true,opacity:.45,dashSize:.075,gapSize:.06,depthWrite:false}));
+    this.guide.visible=false;scene.add(this.guide);
     this.trail.visible = this.tether.visible = this.head.visible = false;
     this.trail.renderOrder = this.tether.renderOrder = 3;
     scene.add(this.trail, this.tether, this.head);
@@ -37,7 +41,25 @@ export class SilkLauncher {
     const hit = this.ray.intersectObjects(this.surfaces, false)[0];
     const silk=this.web.raycast(origin,direction,Math.min(SILK_RANGE,hit?.distance??SILK_RANGE),.1,.32);
     const contact=silk??hit;
-    return { hit:contact, inRange: target.distanceTo(origin) <= SILK_RANGE, blocked: !!contact && contact.point.distanceTo(target) > .25 };
+    const anchor:WebAnchor|undefined=silk?{position:silk.point.clone(),strandId:silk.strand.id,t:silk.t}:hit?{position:hit.point.clone().addScaledVector(surfaceNormal(hit,direction),.065),normal:surfaceNormal(hit,direction)}:undefined;
+    return { hit:contact, anchor, inRange: target.distanceTo(origin) <= SILK_RANGE, blocked: !!contact && contact.point.distanceTo(target) > .25 };
+  }
+  spanStatus(anchor:WebAnchor){
+    if(!this.pending)return undefined;
+    const a=this.web.anchorPosition(this.pending),b=this.web.anchorPosition(anchor);
+    if(!a||!b)return 'same';
+    if(a.distanceTo(b)>SILK_SPAN)return 'long';
+    const problem=this.web.connectionProblem(this.pending,anchor);
+    return problem??(!this.clearSpan(a,b)?'blocked':undefined);
+  }
+  showGuide(anchor?:WebAnchor){
+    this.guide.visible=!!anchor&&!!this.pending&&!this.shot;
+    if(!this.guide.visible||!anchor||!this.pending)return;
+    const a=this.web.anchorPosition(this.pending),b=this.web.anchorPosition(anchor);if(!a||!b){this.guide.visible=false;return;}
+    const problem=this.spanStatus(anchor),tension=THREE.MathUtils.clamp(1-a.distanceTo(b)/22,.32,.94),positions=this.guide.geometry.attributes.position as THREE.BufferAttribute;
+    for(let i=0;i<=16;i++){const p=strandPoint(a,b,tension,i/16);positions.setXYZ(i,p.x,p.y,p.z);}
+    positions.needsUpdate=true;this.guide.geometry.computeBoundingSphere();this.guide.computeLineDistances();
+    (this.guide.material as THREE.LineDashedMaterial).color.set(problem?'#c38b72':'#a6dcd5');
   }
   shoot(target: THREE.Vector3) {
     if (this.shot) return false;
@@ -50,7 +72,7 @@ export class SilkLauncher {
   cancel() {
     const hadSilk = !!this.pending || !!this.shot;
     this.pending = this.shot = undefined;
-    this.trail.visible = this.head.visible = this.tether.visible = false;
+    this.trail.visible = this.head.visible = this.tether.visible = this.guide.visible = false;
     return hadSilk;
   }
   private linePoints(line: THREE.Line, a: THREE.Vector3, b: THREE.Vector3) {
@@ -78,14 +100,15 @@ export class SilkLauncher {
     this.onLand();
     if (!this.pending) {
       this.pending = anchor;
-      this.onMessage('Silk attached. F pulls you toward it; click another surface or thread to weave.');
+      this.onMessage('Silk attached. Click a second hold; C continues from each endpoint, F pulls.');
     } else if (this.pending.position.distanceTo(anchor.position) > SILK_SPAN) {
       this.onMessage('The span is too long. Move closer, or R to release the anchor.');
     } else if (!this.clearSpan(this.pending.position, anchor.position)) {
       this.onMessage('Something crosses this path. Choose a clear span between the anchors.');
     } else if (this.web.connect(this.pending, anchor)) {
-      this.pending = undefined; this.onBuilt();
-      this.onMessage('A new path. Approach the thread and press E to climb onto it.');
+      // A strand attachment may just have split: retain the resulting real node, not its old strand ID.
+      this.pending = this.chaining?this.web.nodeAnchor(anchor.position,anchor.normal):undefined; this.onBuilt();
+      this.onMessage(this.chaining?'Thread woven. Click the next hold to continue; C ends the chain.':'A new path. C enables continuous weaving; E traverses silk.');
     } else this.onMessage(this.web.strands.size >= 240 ? 'The garden holds enough silk. Cut an old strand to make room.' : 'Choose a separate anchor, or R to release the loose thread.');
   }
   update(dt: number) {

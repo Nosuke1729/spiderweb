@@ -21,8 +21,9 @@ export class SpiderCamera {
   }
   resize(w: number, h: number) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
   look(dx: number, dy: number) {
-    this.heading.applyAxisAngle(this.referenceNormal, -dx * .003 * this.sensitivity).normalize();
-    this.pitch = THREE.MathUtils.clamp(this.pitch + dy * .0028 * this.sensitivity, -1.2, 1.32);
+    const precision=this.aim?.55:1;
+    this.heading.applyAxisAngle(this.referenceNormal, -dx * .003 * this.sensitivity*precision).normalize();
+    this.pitch = THREE.MathUtils.clamp(this.pitch + dy * .0028 * this.sensitivity*precision, -1.2, 1.32);
   }
   zoom(delta: number) { this.orbitDistance = THREE.MathUtils.clamp(this.orbitDistance * Math.exp(delta * .001), 1.65, 6.5); }
   recenter(heading: THREE.Vector3) { this.heading.copy(heading).projectOnPlane(this.referenceNormal).normalize(); this.pitch = .35; }
